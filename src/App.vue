@@ -2,7 +2,12 @@
     <div class="container">
         <label v-for="(item, index) in mouseOpts" :key="index">
             <input type="radio" v-model="config.mouse" name="mouse" :value="item.value" />
-            {{item.label}}
+            {{ item.label }}
+        </label>
+        <hr />
+        <label v-for="(item, index) in keyboardOpts" :key="index">
+            <input type="radio" v-model="config.keyboard" name="keyboard" :value="item.value" />
+            {{ item.label }}
         </label>
         <hr />
         {{ config }}
@@ -17,12 +22,20 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { ref } from "vue";
 const mouseOpts = ["无", "左键", "右键", "中键"].map((label, value) => ({ label, value }));
+const keyboardOpts = ["无", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "a", "b", "c",
+    "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u",
+    "v", "w", "x", "y", "z", "Num 1", "Num 2", "Num 3", "Num 4", "Num 5", "Num 6", "Num 7", "Num 8", "Num 9", "Num 0"
+].map((label, value) => ({
+    label,
+    value,
+}));
 const alert = async (content: string, title?: string) => {
     message(content, { title, okLabel: "知道了" });
 };
 
 const config = ref({
     mouse: 0,
+    keyboard: 1,
     interval: 100,
 });
 const save = async () => {
