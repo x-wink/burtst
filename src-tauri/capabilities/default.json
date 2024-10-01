@@ -7,10 +7,6 @@
     "core:default",
     "shell:allow-open",
     "dialog:allow-message",
-    "dialog:deny-confirm",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-is-registered",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-unregister-all"
+    "dialog:deny-confirm"
   ]
 }

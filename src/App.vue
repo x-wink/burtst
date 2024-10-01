@@ -8,13 +8,19 @@
             </label>
         </div>
         <label>按键连点</label>
-        <div class="list">
-            <select name="keyboard" v-model="config.keyboard">
-                <option v-for="(item, index) in keyboardOpts" :key="index" :value="item.value">{{ item.label }}</option>
-            </select>
-        </div>
+        <select name="keyboard" v-model="config.keyboard">
+            <option v-for="(item, index) in keyboardOpts" :key="index" :value="item.value">{{ item.label }}</option>
+        </select>
         <label>间隔时间（毫秒）</label>
         <input type="number" :min="10" :max="9999" v-model="config.interval" />
+        <label>开始热键</label>
+        <select name="start" v-model="config.start">
+            <option v-for="(item, index) in keyboardOpts" :key="index" :value="item.value">{{ item.label }}</option>
+        </select>
+        <label>停止热键</label>
+        <select name="stop" v-model="config.stop">
+            <option v-for="(item, index) in keyboardOpts" :key="index" :value="item.value">{{ item.label }}</option>
+        </select>
         <div class="btns">
             <button @click="save">保存设置</button>
             <button class="primary" @click="running ? stop() : start()">{{ running ? "停止" : "开始" }}连发</button>
@@ -89,6 +95,8 @@ const config = ref(
               mouse: 0,
               keyboard: 1,
               interval: 100,
+              start: 9,
+              stop: 10,
           }
 );
 const save = async () => {
