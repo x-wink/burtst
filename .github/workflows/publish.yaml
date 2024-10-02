@@ -18,17 +18,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
+
       - name: Install pnpm
         run: npm install -g pnpm
+
       - name: Sync node version and setup cache
         uses: actions/setup-node@v3
         with:
           node-version: "lts/*"
           cache: "pnpm"
+
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
+        
       - name: Build the app
         id: build
         uses: tauri-apps/tauri-action@v0
