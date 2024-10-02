@@ -49,5 +49,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # 运行自己的脚本
-        run: ts-node --esm scripts/updater.ts
+        run: npx ts-node --esm scripts/updater.ts
         
