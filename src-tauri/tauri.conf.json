@@ -14,7 +14,7 @@
       {
         "title": "【气质花】按键助手",
         "width": 320,
-        "height": 480,
+        "height": 640,
         "resizable": false,
         "maximizable": false,
         "center": true,
@@ -23,6 +23,14 @@
     ],
     "security": {
       "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://api.github.com/repos/x-wink/bursts/releases/latest"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBQzk5OThCQ0RDQTEyREQKUldUZEVzck5pNW5KcXJEWWd5KzJCaG9RdGQ1SVpoMTNuUDA5QUNrT3FXRy9PWXN0V1lFdmo3djEK"
     }
   },
   "bundle": {

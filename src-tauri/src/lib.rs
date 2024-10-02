@@ -162,8 +162,10 @@ fn stop() {
 pub fn run() {
     // hotkey();
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![setup, start, stop])
         .run(tauri::generate_context!())
         .expect("启动失败");

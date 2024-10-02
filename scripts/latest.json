@@ -1,0 +1,23 @@
+{
+  "version": "v0.0.1",
+  "notes": "Test version",
+  "pub_date": "2024-10-01T00:00:00Z",
+  "platforms": {
+    "darwin-x86_64": {
+      "signature": "Content of app.tar.gz.sig",
+      "url": "https://github.com/x-wink/bursts/releases/download/v0.0.1/bursts-x86_64.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "Content of app.tar.gz.sig",
+      "url": "https://github.com/x-wink/bursts/releases/download/v0.0.1/bursts-aarch64.app.tar.gz"
+    },
+    "linux-x86_64": {
+      "signature": "Content of app.AppImage.tar.gz.sig",
+      "url": "https://github.com/x-wink/bursts/releases/download/v0.0.1/bursts-amd64.AppImage.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "Content of app.msi.sig",
+      "url": "https://github.com/x-wink/bursts/releases/download/v0.0.1/bursts-x64.msi.zip"
+    }
+  }
+}

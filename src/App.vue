@@ -22,6 +22,7 @@
             <option v-for="(item, index) in keyboardOpts" :key="index" :value="item.value">{{ item.label }}</option>
         </select>
         <div class="btns">
+            <button @click="checkUpdate(true)">检查更新</button>
             <button @click="save">保存设置</button>
             <button class="primary" @click="running ? stop() : start()">{{ running ? "停止" : "开始" }}连发</button>
         </div>
@@ -30,6 +31,8 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { ref } from "vue";
 const mouseOpts = ["无", "左键", "右键", "中键"].map((label, value) => ({ label, value }));
 const keyboardOpts = [
@@ -106,6 +109,23 @@ const save = async () => {
     });
     alert("保存成功");
 };
+const checkUpdate = async (manual = false) => {
+    try {
+        const update = await check();
+        if (update?.available) {
+            if (window.confirm("发现新版本，是否立即下载更新并重启本应用？")) {
+                await update.downloadAndInstall();
+                await relaunch();
+            }
+        } else if (manual) {
+            alert("当前已是最新版本");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("检查更新失败");
+    }
+};
+checkUpdate();
 const running = ref(false);
 const start = async () => {
     alert("开始连发");
