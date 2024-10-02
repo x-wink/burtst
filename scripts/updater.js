@@ -10,7 +10,7 @@ const updateRelease = async () => {
   const { data: release } = await octokit.rest.repos.getReleaseByTag({
     owner: context.repo.owner,
     repo: context.repo.repo,
-    tag: "updater",
+    tag: "v0.0.1",
   });
   // 删除旧的的文件
   const deletePromises = release.assets
