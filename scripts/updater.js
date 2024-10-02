@@ -3,7 +3,7 @@ import { context, getOctokit } from "@actions/github";
 import { readFile } from "node:fs/promises";
 
 // 在容器中可以通过env环境变量来获取参数
-const octokit = getOctokit(process.env.GITHUB_TOKEN!);
+const octokit = getOctokit(process.env.GITHUB_TOKEN);
 
 const updateRelease = async () => {
   // 获取updater tag的release
