@@ -205,6 +205,22 @@ body {
   opacity: 0.4;
 }
 
+/* 有可用更新时才出现，用主题色 + 右上角小圆点把它和常规窗口按钮区分开 */
+.win-btn--update {
+  position: relative;
+  color: var(--fb-color-primary);
+}
+
+.win-btn__dot {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--fb-color-primary);
+}
+
 .win-btn.close:hover {
   background: var(--fb-color-danger-strong);
   color: var(--fb-text-on-accent);

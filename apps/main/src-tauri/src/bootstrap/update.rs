@@ -14,6 +14,30 @@ use tracing::{info, warn};
 pub const DEFAULT_GITHUB_PROXY: &str = "https://gh-proxy.com/";
 pub const UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
 pub const UPDATE_DOWNLOAD_FAILED_EVENT: &str = "update-download-failed";
+/// 检查到新版本但按用户设置不自动下载，交由前端在标题栏提示。
+pub const UPDATE_AVAILABLE_EVENT: &str = "update-available";
+
+/// settings.json 中「自动更新」开关的键名。缺省视为开启。
+pub const AUTO_UPDATE_KEY: &str = "autoUpdate";
+
+/// 读取「自动更新」开关。读不到 store 或未设置时默认开启——新装用户应当自动拿到修复。
+pub fn auto_update_enabled(app: &tauri::AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    app.store(crate::STORE_PATH)
+        .ok()
+        .and_then(|store| store.get(AUTO_UPDATE_KEY).and_then(|v| v.as_bool()))
+        .unwrap_or(true)
+}
+
+/// 一次更新检查的来源，决定要不要下载、以及「已是最新」要不要出声。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckTrigger {
+    /// 启动时自动检查。是否下载取决于「自动更新」开关；无更新时保持安静。
+    Startup,
+    /// 用户主动触发（菜单「检查更新」或标题栏的可用更新提示）。
+    /// 一律下载——用户已经表达了要更新的意图，开关只管「自动」那一档。
+    Manual,
+}
 
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -42,7 +66,7 @@ impl Drop for UpdateLockGuard<'_> {
     }
 }
 
-/// 启动时的更新检查流程：先尝试应用待安装包，再后台静默检查新版本。
+/// 启动时的更新检查流程：先尝试应用待安装包，再按「自动更新」开关决定是否后台下载。
 pub async fn check_for_updates(app: tauri::AppHandle) {
     if crate::commands::app::try_apply_pending_update(&app).await {
         return;
@@ -54,46 +78,86 @@ pub async fn check_for_updates(app: tauri::AppHandle) {
         None => return,
     };
 
-    if let Err(e) = do_silent_update(&app).await {
-        warn!("silent update failed: {}", e);
+    if let Err(e) = check_and_download(&app, CheckTrigger::Startup).await {
+        warn!("启动期更新检查失败: {}", e);
     }
 }
 
-async fn do_silent_update(app: &tauri::AppHandle) -> Result<(), String> {
-    let updater = build_updater(app)?;
+/// 检查更新，并按 `trigger` 与「自动更新」开关决定是否下载。
+///
+/// 启动检查与菜单「检查更新」共用这一条流程：两边曾经各写一份几乎相同的实现，
+/// 改一处漏一处（代理、进度事件、落盘路径都得同步），现在只留这一份。
+pub async fn check_and_download(
+    app: &tauri::AppHandle,
+    trigger: CheckTrigger,
+) -> Result<(), String> {
+    let updater = build_updater(app).map_err(|e| format!("更新模块不可用: {e}"))?;
     let mut update = match updater.check().await {
         Ok(Some(u)) => u,
         Ok(None) => {
-            info!("app is up to date");
+            info!("已是最新版本");
+            // 启动检查保持安静：没更新时弹「已是最新」只会打扰人
+            if trigger == CheckTrigger::Manual {
+                let _ = app.emit("update-not-available", ());
+            }
             return Ok(());
         }
-        Err(e) => return Err(format!("update check failed: {e}")),
+        Err(e) => {
+            warn!("检查更新失败: {}", e);
+            return Err(format!("检查更新失败: {e}"));
+        }
     };
 
     let version = update.version.clone();
     let notes = update.body.clone();
-    info!("update available: {}", version);
+    info!("发现新版本: {}", version);
+
+    let download = trigger == CheckTrigger::Manual || auto_update_enabled(app);
+    if !download {
+        info!("自动更新已关闭，仅提示可用更新");
+        let _ = app.emit(
+            UPDATE_AVAILABLE_EVENT,
+            serde_json::json!({ "version": version, "notes": notes }),
+        );
+        return Ok(());
+    }
+
     proxy_github_download_url(app, &mut update);
-    let _ = app.emit("update-downloading", &version);
+    // silent=true 时前端只画进度条不弹 toast：启动期自动下载不该主动打断用户
+    let _ = app.emit(
+        "update-downloading",
+        serde_json::json!({
+            "version": version,
+            "silent": trigger == CheckTrigger::Startup,
+        }),
+    );
 
     let bytes = download_update(app, &update, &version)
         .await
-        .map_err(|e| format!("download failed: {e}"))?;
+        .map_err(|e| format!("下载更新失败: {e}"))?;
 
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map(|d| d.join("pending_update"))
-        .map_err(|e| format!("can't get data dir: {e}"))?;
-
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
-    std::fs::write(dir.join("installer"), &bytes).map_err(|e| format!("{e}"))?;
-    std::fs::write(dir.join("version"), &version).map_err(|e| format!("{e}"))?;
-
+    save_pending_update(app, &version, &bytes)?;
     let _ = app.emit(
         "update-ready",
         serde_json::json!({ "version": version, "notes": notes }),
     );
+    Ok(())
+}
+
+/// 把下载好的安装包落盘，等待用户点「重启并更新」或下次启动时安装。
+pub fn save_pending_update(
+    app: &tauri::AppHandle,
+    version: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
+        .join(crate::commands::app::PENDING_UPDATE_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建更新目录: {e}"))?;
+    std::fs::write(dir.join("installer"), bytes).map_err(|e| format!("保存安装包失败: {e}"))?;
+    std::fs::write(dir.join("version"), version).map_err(|e| format!("保存版本信息失败: {e}"))?;
     Ok(())
 }
 

@@ -21,8 +21,8 @@ use bootstrap::{
 };
 use commands::{
     app::{
-        agree_license, check_update, exit_app, minimize_to_float, needs_agreement, show_main_panel,
-        toggle_autostart,
+        agree_license, apply_pending_update, check_update, exit_app, minimize_to_float,
+        needs_agreement, show_main_panel, toggle_autostart,
     },
     ddhid_diagnostic::export_dd_hid_diagnostic_report,
     driver::{
@@ -156,6 +156,7 @@ pub fn run() {
             needs_agreement,
             agree_license,
             check_update,
+            apply_pending_update,
             exit_app,
             show_main_panel,
             minimize_to_float,

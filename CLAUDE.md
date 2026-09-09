@@ -43,7 +43,7 @@ apps/main/src-tauri/src/        # Tauri 后端（Rust）
   bootstrap/                    # 启动期装配（不含 Tauri 命令）
     logging.rs                  # tracing 初始化 + panic hook + 旧日志清理
     agreement.rs                # check_agreement + AGREEMENT_VERSION
-    update.rs                   # UpdateLock + 静默更新 + check_for_updates
+    update.rs                   # UpdateLock + 更新检查下载 + 自动更新开关
     profile.rs                  # load_or_init_profile（委托 qzh-profile）
     input.rs                    # init_input_backend + parse_switch_mode_arg
   commands/                     # 前端 invoke 入口（纯 Tauri 桥接）
@@ -152,6 +152,10 @@ DDSimple 下 Toggle 规则的 `TriggerTarget` 是**空集**——`ExtraInformati
 
 前端不再自行维护白名单，`get_key_policy` 按当前输入模式下发四个槽位的允许集，`KeyCapture` 只判断「在不在集合里」，不在就带原因回调交给页面提示。输入模式切换后需重新拉取。
 
+**自动更新**：开关存 settings.json 的 `autoUpdate`（缺省视为开启），后端 `bootstrap/update.rs` 与前端 `PanelApp` 读同一个键。`check_and_download(app, trigger)` 是唯一的检查入口，`CheckTrigger::Startup` 才受开关约束、且「已是最新」不出声；`Manual`（菜单「检查更新」或标题栏提示）一律下载——用户已经表达了更新意图，开关只管「自动」那一档。不下载时发 `update-available` 让标题栏亮提示，下载完成发 `update-ready` 弹窗，安装由 `apply_pending_update` 命令触发。`update-downloading` 带 `silent` 标志，启动期自动下载只画进度条不弹 toast。
+
+**更新公告的两个来源不能混**：菜单 / 关于里的「更新公告」（`UpdateNoticeDialog` 的 `mode='current'`）取 `changelog.ts` 从随包 `CHANGELOG.md` 里切出的**当前运行版本**那一节，回答「我现在这版做了什么」；`mode='ready'` 才是刚下载完、还没装上的新版本的 `update.body`。两者若共用一个状态，用户在菜单里会看到一份自己还没装上的公告。
+
 **Markdown 渲染**：用户协议（`assets/EULA.md`，`?raw` 内联进包）与更新公告（`update.body`，来自 updater 接口）都由 `components/Markdown.tsx` 渲染，解析在同目录的 `markdown-parse.ts`。不引第三方库有两个硬理由：更新公告正文来自网络，任何走 `dangerouslySetInnerHTML` 的方案都会开出 XSS 面，而这里只产出 React 元素、文本一律经 children 转义；现成渲染器会输出真的 `<a href>`，Tauri WebView 点一下就把面板导航走且无法返回，故链接只渲染文本、完整地址放 `title`（本应用未装 opener / shell 插件）。支持范围按两份文档实际用法划定：ATX 标题、`---` 分隔线、有序 / 无序列表（可嵌套）、段落、加粗、斜体、行内代码、链接；表格、引用块、围栏代码块、图片与内联嵌套不支持，超范围语法当普通文本显示。段落软换行按两侧是否为 CJK 决定要不要补空格。
 
 **AppHandle 不进 packages**：`win-driver` / `win-input` / `win-sysinfo` / `burst-engine` 所有函数均不接受 `AppHandle` 参数。资源目录由 `commands/driver.rs` 从 `app.path().resource_dir()` 取得后传入，Tauri 状态管理留在 commands 层。
@@ -176,7 +180,7 @@ DDSimple 下 Toggle 规则的 `TriggerTarget` 是**空集**——`ExtraInformati
 
 ## 发版流程
 
-**更新日志**：`CHANGELOG.md`（项目根目录）是唯一内容源，格式为 `## [版本号] - 日期` + 中文分节（新功能 / 问题修复 / 行为变更 / 升级方式 / 已知问题）。CI 发版时由 `scripts/extract-changelog.ts` 自动提取当前版本节作为 GitHub Release 正文，同时作为 `update.body` 通过 `update-ready` 事件在应用内「更新公告」弹窗展示。
+**更新日志**：`CHANGELOG.md`（项目根目录）是唯一内容源，格式为 `## [版本号] - 日期` + 中文分节（新功能 / 问题修复 / 行为变更 / 升级方式 / 已知问题）。CI 发版时由 `scripts/extract-changelog.ts` 自动提取当前版本节作为 GitHub Release 正文，再经 updater 接口的 `update.body` 回到应用内。前端 `panel/changelog.ts` 用同一套分节规则读随包内联的这份 `CHANGELOG.md`，因此菜单里看到的当前版本公告与 Release 正文一致。
 
 **填写原则**：`[Unreleased]` 节记录的是相较上一个发布版本的**最终净变化**，而非每次提交的独立记录。同一功能经多次迭代后只写最终结果，中间反复修改不单独列出；已被后续提交撤销的改动不出现在 changelog 中。
 

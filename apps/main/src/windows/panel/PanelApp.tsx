@@ -15,7 +15,14 @@ import CloseBehaviorForm, { type CloseBehavior } from './components/CloseBehavio
 import { useConfirm } from './components/ConfirmDialog';
 import ContextMenu, { type ContextMenuItem } from './components/ContextMenu';
 import IntervalInput from './components/IntervalInput';
-import { ChevronIcon, CloseIcon, EditIcon, MenuIcon, MinimizeIcon } from './components/icons';
+import {
+  ChevronIcon,
+  CloseIcon,
+  EditIcon,
+  MenuIcon,
+  MinimizeIcon,
+  UpdateIcon,
+} from './components/icons';
 import Kbd from './components/Kbd';
 
 import KeyCapture, {
@@ -54,7 +61,11 @@ import {
   type ThemeMode,
   type ThemeSettings,
 } from './theme';
-import UpdateNoticeDialog, { type UpdateNoticeInfo } from './dialogs/UpdateNoticeDialog';
+import UpdateNoticeDialog, {
+  type UpdateNoticeInfo,
+  type UpdateNoticeMode,
+} from './dialogs/UpdateNoticeDialog';
+import { changelogSection } from './changelog';
 import './PanelApp.css';
 
 /** 后端 `take_profile_notice` 的返回形态，与 `qzh_profile::SanitizeReport` 同源。 */
@@ -76,6 +87,8 @@ const ACTIVE_TAB_KEY = 'activeTab';
 const SOUND_KEY = 'sound';
 const THEME_KEY = 'theme';
 const LAYOUT_KEY = 'layout';
+// 与后端 bootstrap/update.rs 的 AUTO_UPDATE_KEY 同名，双方读同一份 settings.json
+const AUTO_UPDATE_KEY = 'autoUpdate';
 
 // 面板布局：竖版规则列表 / 横版键鼠图。两者各自定尺寸，切换时 setSize + center。
 type PanelLayout = 'vertical' | 'horizontal';
@@ -337,8 +350,15 @@ export default function PanelApp() {
   const [showRepair, setShowRepair] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [appVersion, setAppVersion] = useState('');
-  const [updateNotice, setUpdateNotice] = useState<UpdateNoticeInfo | null>(null);
-  const [showUpdateNotice, setShowUpdateNotice] = useState(false);
+  // 更新的三种状态互不重叠：available=查到但没下，ready=下好待装，notice=弹窗当前展示的内容
+  const [updateAvailable, setUpdateAvailable] = useState<UpdateNoticeInfo | null>(null);
+  const [updateReady, setUpdateReady] = useState<UpdateNoticeInfo | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<{
+    info: UpdateNoticeInfo;
+    mode: UpdateNoticeMode;
+  } | null>(null);
+  const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(true);
   const [updateProgress, setUpdateProgress] = useState<UpdateDownloadProgress | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const [globalEnabled, setGlobalEnabled] = useState(false);
@@ -592,6 +612,15 @@ export default function PanelApp() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    settingsStore
+      .get<boolean>(AUTO_UPDATE_KEY)
+      .then((v) => {
+        if (typeof v === 'boolean') setAutoUpdate(v);
+      })
+      .catch(() => {});
+  }, []);
+
   // 主题：从 store 加载主色 + 亮暗模式并立即应用；mode=system 时监听系统配色变化。
   useEffect(() => {
     settingsStore
@@ -770,18 +799,22 @@ export default function PanelApp() {
     const unlistenGlobal = listen<boolean>('global-enabled-changed', (e) => {
       setGlobalEnabled(e.payload);
     });
-    const unlistenDownloading = listen<string>('update-downloading', (e) => {
-      if (updateProgressDoneTimer.current) clearTimeout(updateProgressDoneTimer.current);
-      updateDownloadFailedRef.current = false;
-      setUpdateProgress({
-        version: e.payload,
-        downloaded: 0,
-        total: null,
-        percent: null,
-        done: false,
-      });
-      toast.info(`发现新版本 v${e.payload}，正在下载更新…`);
-    });
+    const unlistenDownloading = listen<{ version: string; silent: boolean }>(
+      'update-downloading',
+      (e) => {
+        if (updateProgressDoneTimer.current) clearTimeout(updateProgressDoneTimer.current);
+        updateDownloadFailedRef.current = false;
+        setUpdateProgress({
+          version: e.payload.version,
+          downloaded: 0,
+          total: null,
+          percent: null,
+          done: false,
+        });
+        // 启动期自动下载只画进度条，不弹 toast 抢注意力
+        if (!e.payload.silent) toast.info(`发现新版本 v${e.payload.version}，正在下载更新…`);
+      },
+    );
     const unlistenProgress = listen<UpdateDownloadProgress>(UPDATE_PROGRESS_EVENT, (e) => {
       if (updateProgressDoneTimer.current) clearTimeout(updateProgressDoneTimer.current);
       setUpdateProgress(e.payload);
@@ -799,9 +832,14 @@ export default function PanelApp() {
       setUpdateProgress(null);
       toast.warning(`下载更新失败：${e.payload.message}`);
     });
+    // 自动更新关闭时后端只报「有新版本」，不下载，交给标题栏提示
+    const unlistenAvailable = listen<UpdateNoticeInfo>('update-available', (e) => {
+      setUpdateAvailable(e.payload);
+    });
     const unlistenReady = listen<UpdateNoticeInfo>('update-ready', (e) => {
-      setUpdateNotice(e.payload);
-      setShowUpdateNotice(true);
+      setUpdateAvailable(null);
+      setUpdateReady(e.payload);
+      setUpdateNotice({ info: e.payload, mode: 'ready' });
     });
     const unlistenUpToDate = listen('update-not-available', () => {
       setUpdateProgress(null);
@@ -822,6 +860,7 @@ export default function PanelApp() {
       unlistenDownloading.then((fn) => fn());
       unlistenProgress.then((fn) => fn());
       unlistenFailed.then((fn) => fn());
+      unlistenAvailable.then((fn) => fn());
       unlistenReady.then((fn) => fn());
       unlistenUpToDate.then((fn) => fn());
       unlistenProfileSwitch.then((fn) => fn());
@@ -1786,6 +1825,33 @@ export default function PanelApp() {
     });
   }
 
+  function handleToggleAutoUpdate(next: boolean) {
+    setAutoUpdate(next);
+    settingsStore.set(AUTO_UPDATE_KEY, next).then(
+      () => settingsStore.save(),
+      () => toast.warning('保存自动更新设置失败'),
+    );
+  }
+
+  // 标题栏提示：已下好就直接开弹窗，只是查到新版本则走一次手动检查（必定下载）
+  function handleUpdateIndicator() {
+    if (updateReady) {
+      setUpdateNotice({ info: updateReady, mode: 'ready' });
+      return;
+    }
+    handleCheckUpdate();
+  }
+
+  async function handleApplyUpdate() {
+    setApplyingUpdate(true);
+    try {
+      await invoke('apply_pending_update');
+    } catch (e) {
+      setApplyingUpdate(false);
+      toast.warning(`安装更新失败：${e}`);
+    }
+  }
+
   function handleShowAbout() {
     setMenuOpen(false);
     setShowAbout(true);
@@ -1906,6 +1972,21 @@ export default function PanelApp() {
               </svg>
             )}
           </button>
+          {(updateReady || updateAvailable) && (
+            <button
+              className="win-btn win-btn--update"
+              onClick={handleUpdateIndicator}
+              aria-label="有可用更新"
+              title={
+                updateReady
+                  ? `新版本 v${updateReady.version} 已下载，点击查看并安装`
+                  : `发现新版本 v${updateAvailable?.version}，点击下载更新`
+              }
+            >
+              <UpdateIcon size={14} />
+              <span className="win-btn__dot" aria-hidden="true" />
+            </button>
+          )}
           <button
             ref={menuBtnRef}
             className="win-btn menu-btn"
@@ -2661,16 +2742,15 @@ export default function PanelApp() {
           { type: 'divider' },
           { label: '检查更新', onClick: handleCheckUpdate },
           {
+            // 固定看当前运行版本做了什么，来源是随包内联的 CHANGELOG；
+            // 新版本的公告只在下载完成的弹窗里出现，两者不能混
             label: '更新公告',
-            appendIcon: updateNotice ? (
-              <span
-                aria-hidden="true"
-                style={{ width: 6, height: 6, borderRadius: '50%', background: '#6c4de6' }}
-              />
-            ) : undefined,
             onClick: () => {
               setMenuOpen(false);
-              if (updateNotice) setShowUpdateNotice(true);
+              setUpdateNotice({
+                info: { version: appVersion, notes: changelogSection(appVersion) },
+                mode: 'current',
+              });
             },
           },
           {
@@ -2700,6 +2780,7 @@ export default function PanelApp() {
           interceptionInstalled={interceptionInstalled}
           ddHidInstalled={ddHidInstalled}
           autostartEnabled={sysInfo.autostart_enabled}
+          autoUpdate={autoUpdate}
           togglingAutostart={togglingAutostart}
           sound={sound}
           availableVoices={availableVoices}
@@ -2726,6 +2807,7 @@ export default function PanelApp() {
           onToggleGlobal={() => void toggleGlobal()}
           onSetCloseBehavior={persistCloseBehavior}
           onToggleAutostart={() => void handleToggleAutostart()}
+          onToggleAutoUpdate={handleToggleAutoUpdate}
           onSoundChange={persistSound}
           onPreviewSound={previewSound}
           onPickSoundAudio={pickSoundAudio}
@@ -2754,9 +2836,15 @@ export default function PanelApp() {
         <AgreementDialog onAgreed={handleAgreed} />
       </Overlay>
 
-      <Overlay open={showUpdateNotice} onClose={() => setShowUpdateNotice(false)}>
+      <Overlay open={updateNotice !== null} onClose={() => setUpdateNotice(null)}>
         {updateNotice && (
-          <UpdateNoticeDialog info={updateNotice} onClose={() => setShowUpdateNotice(false)} />
+          <UpdateNoticeDialog
+            info={updateNotice.info}
+            mode={updateNotice.mode}
+            applying={applyingUpdate}
+            onRestart={() => void handleApplyUpdate()}
+            onClose={() => setUpdateNotice(null)}
+          />
         )}
       </Overlay>
 
@@ -2779,7 +2867,7 @@ export default function PanelApp() {
               scheduler_hp_degraded: sysInfo.scheduler_hp_degraded,
             } satisfies AboutDialogInfo
           }
-          updateNotice={updateNotice}
+          pendingUpdate={updateReady ?? updateAvailable}
           checkingUpdate={updateProgress !== null && !updateProgress.done}
           onClose={() => setShowAbout(false)}
           onCheckUpdate={() => {
@@ -2788,7 +2876,10 @@ export default function PanelApp() {
           }}
           onShowUpdateNotice={() => {
             setShowAbout(false);
-            if (updateNotice) setShowUpdateNotice(true);
+            setUpdateNotice({
+              info: { version: appVersion, notes: changelogSection(appVersion) },
+              mode: 'current',
+            });
           }}
           onShowAgreement={() => {
             setShowAbout(false);

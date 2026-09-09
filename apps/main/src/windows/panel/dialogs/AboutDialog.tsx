@@ -23,7 +23,8 @@ export interface AboutDialogInfo {
 
 interface Props {
   info: AboutDialogInfo;
-  updateNotice: UpdateNoticeInfo | null;
+  /** 查到但尚未装上的新版本；仅用于「检查更新」那一行的角标。 */
+  pendingUpdate: UpdateNoticeInfo | null;
   checkingUpdate: boolean;
   onClose: () => void;
   onCheckUpdate: () => void;
@@ -58,7 +59,7 @@ function DirRow({ label, onOpen }: { label: string; onOpen: () => void }) {
 
 export default function AboutDialog({
   info,
-  updateNotice,
+  pendingUpdate,
   checkingUpdate,
   onClose,
   onCheckUpdate,
@@ -174,9 +175,9 @@ export default function AboutDialog({
             <li>
               <span className="about-key">检查更新</span>
               <span className="about-value about-value--with-action">
-                {updateNotice && (
+                {pendingUpdate && (
                   <span className="about-flag about-flag--primary">
-                    新版本 v{updateNotice.version}
+                    新版本 v{pendingUpdate.version}
                   </span>
                 )}
                 <Button
@@ -193,14 +194,8 @@ export default function AboutDialog({
             <li>
               <span className="about-key">更新公告</span>
               <span className="about-value about-value--with-action">
-                {updateNotice && <span className="about-update-dot" aria-hidden="true" />}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!updateNotice}
-                  onClick={onShowUpdateNotice}
-                >
-                  {updateNotice ? '查看公告' : '暂无公告'}
+                <Button size="sm" variant="outline" onClick={onShowUpdateNotice}>
+                  查看公告
                 </Button>
               </span>
             </li>

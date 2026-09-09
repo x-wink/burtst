@@ -1,16 +1,18 @@
 //! 协议同意 / 检查更新 / 退出。
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_store::StoreExt;
 use tracing::{info, warn};
 
 use crate::bootstrap::{
     agreement::AGREEMENT_VERSION,
-    update::{build_updater, download_update, proxy_github_download_url, UpdateLock},
+    update::{
+        build_updater, check_and_download, proxy_github_download_url, CheckTrigger, UpdateLock,
+    },
 };
 use crate::commands::engine::EngineState;
 
-const PENDING_UPDATE_DIR: &str = "pending_update";
+pub(crate) const PENDING_UPDATE_DIR: &str = "pending_update";
 
 #[tauri::command]
 pub fn needs_agreement(app: AppHandle) -> Result<bool, String> {
@@ -78,55 +80,26 @@ pub fn toggle_autostart(app: AppHandle) -> Result<bool, String> {
     Ok(launch.is_enabled().unwrap_or(!enabled))
 }
 
+/// 用户主动检查更新：一律走「检查 → 下载 → 弹公告」，与「自动更新」开关无关——
+/// 开关只决定启动时要不要自动下载，用户点了就是表达了要更新的意图。
 #[tauri::command]
 pub async fn check_update(app: AppHandle, lock: State<'_, UpdateLock>) -> Result<(), String> {
     let _guard = lock.acquire().ok_or("更新正在进行中")?;
-    do_check_update(&app).await
+    check_and_download(&app, CheckTrigger::Manual).await
 }
 
-async fn do_check_update(app: &AppHandle) -> Result<(), String> {
-    let updater = build_updater(app).map_err(|e| format!("更新模块不可用: {e}"))?;
-    let mut update = match updater.check().await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            let _ = app.emit("update-not-available", ());
-            return Ok(());
-        }
-        Err(e) => {
-            warn!("update check failed: {}", e);
-            return Err(format!("检查更新失败: {e}"));
-        }
-    };
-
-    let version = update.version.clone();
-    let notes = update.body.clone();
-    info!("update available: {}", version);
-    proxy_github_download_url(app, &mut update);
-    let _ = app.emit("update-downloading", &version);
-
-    let bytes = download_update(app, &update, &version).await.map_err(|e| {
-        warn!("update download failed: {}", e);
-        format!("下载更新失败: {e}")
-    })?;
-
-    save_pending_update(app, &version, &bytes)?;
-    let _ = app.emit(
-        "update-ready",
-        serde_json::json!({ "version": version, "notes": notes }),
-    );
-    Ok(())
-}
-
-fn save_pending_update(app: &AppHandle, version: &str, bytes: &[u8]) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
-        .join(PENDING_UPDATE_DIR);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建更新目录: {e}"))?;
-    std::fs::write(dir.join("installer"), bytes).map_err(|e| format!("保存安装包失败: {e}"))?;
-    std::fs::write(dir.join("version"), version).map_err(|e| format!("保存版本信息失败: {e}"))?;
-    Ok(())
+/// 立即安装已下载的更新包。安装器会接管并重启应用，正常路径下本命令不返回。
+#[tauri::command]
+pub async fn apply_pending_update(
+    app: AppHandle,
+    lock: State<'_, UpdateLock>,
+) -> Result<(), String> {
+    let _guard = lock.acquire().ok_or("更新正在进行中")?;
+    if try_apply_pending_update(&app).await {
+        Ok(())
+    } else {
+        Err("没有可安装的更新包，或安装未能启动".to_string())
+    }
 }
 
 /// 检查待安装包并在版本匹配时立即安装（应用将自动重启）。

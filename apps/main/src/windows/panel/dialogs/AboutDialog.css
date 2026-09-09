@@ -126,15 +126,6 @@
   color: var(--fb-color-primary);
 }
 
-.about-update-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--fb-color-primary);
-  flex: none;
-}
-
 .about-key--inline {
   color: var(--fb-text-weak);
   font-size: var(--fb-fs-sm);

@@ -71,6 +71,7 @@ interface Props {
   ddHidInstalled: DriverStatus;
   autostartEnabled: boolean;
   togglingAutostart: boolean;
+  autoUpdate: boolean;
   sound: SoundSettings;
   availableVoices: string[];
   profiles: SettingsProfileEntry[];
@@ -95,6 +96,7 @@ interface Props {
     panel_toggle?: KeyId | null;
   }) => void;
   onToggleAutostart: () => void;
+  onToggleAutoUpdate: (next: boolean) => void;
   onSoundChange: (patch: Partial<SoundSettings>) => void;
   onPreviewSound: (slot: SoundSlot) => void;
   onPickSoundAudio: (slot: SoundSlot) => void;
@@ -467,6 +469,23 @@ export default function SettingsDialog(props: Props) {
                 >
                   {props.autostartEnabled ? '已启用' : '已禁用'}
                 </Button>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-main">
+                  <span className="settings-row-title">自动更新</span>
+                  <span className="settings-row-desc">
+                    {props.autoUpdate
+                      ? '后台静默下载新版本，下载完成后提示重启安装'
+                      : '仅在标题栏提示有新版本，由你决定何时下载'}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="enable-checkbox"
+                  checked={props.autoUpdate}
+                  onChange={(e) => props.onToggleAutoUpdate(e.target.checked)}
+                  aria-label="自动更新"
+                />
               </div>
             </SettingsSection>
 
