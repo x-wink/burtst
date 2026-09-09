@@ -89,14 +89,14 @@ packages/win-sysinfo/src/
   prereq.rs                     # detect_hvci / detect_sac / detect_pending_reboot / Defender 排除路径
 packages/win-input/src/
   lib.rs                        # InputMode / init_backend / dispatch / SIM_MARKER / PENDING_INJECTIONS
-  ddhid.rs / ddsimple.rs / dd_common.rs   # DD-HID 与 DDSimple 后端（共用 dd_common FFI 装载层）
+  ddsimple.rs / dd_common.rs    # DDSimple 后端 + ddxoft DD SDK 的 FFI 装载层
   interception.rs               # Interception 后端 + is_driver_installed()
 packages/burst-engine/src/
   lib.rs                        # BurstEngine + start_listener（LL keyboard/mouse hook + 消息循环）
 packages/win-driver/src/
   elevation.rs                  # is_process_elevated / run_elevated_exe / run_elevated_exe_capture
   powershell.rs                 # run_script_elevated / ps_single_quoted / ps_string_array / base64_std_encode
-  dd_hid.rs                     # dd_hid_sys_path/installed / install / uninstall / find_dd_hid_oem_inf
+  dd_hid.rs                     # DD-HID 残留检测与卸载（安装链路已移除）
   interception.rs               # install / uninstall（调用 install-interception.exe）
   judge.rs                      # judge_install_result / judge_uninstall_result
   path_util.rs                  # strip_verbatim（去掉 verbatim 路径前缀）
@@ -108,7 +108,7 @@ packages/win-driver/src/
 
 WebView 聚焦时 `WH_KEYBOARD_LL` 全局钩子不触发，面板与浮窗都用 `useKeyRelay` 把键盘事件中继到后端 `relay_key_event` 命令，交由引擎统一处理热键 / Toggle 触发 / `pressed_keys` 维护，避免聚焦窗口时热键被吞。
 
-**输入模式与布局互斥**：DD 系列驱动（DDSimple / DDHID）的单键规则约束无法用横版键鼠图表达，故二者互斥——前端在 `selectInputMode`（横版下禁选 DD）与 `switchLayout`（DD 下禁切横版）两个 choke point 拦截并置灰提示。
+**输入模式与布局互斥**：DDSimple 的单键规则约束无法用横版键鼠图表达，故二者互斥——`selectInputMode`（横版下禁选 DD 驱动）与 `switchLayout`（DD 驱动下禁切横版）两个 choke point 拦截并提示。后者按后端下发的 `coincident_toggle` 能力位判断而非模式名，且用 `aria-disabled` 而非 `disabled`：禁用的按钮不触发 `onClick`，原因提示就永远跑不到。
 
 **配置文件格式（.qzh）**：`FileHeader`（19 字节，含 Nonce）+ AES-256-GCM 密文 + Auth Tag。Header 的 `magic+version+flags` 作为 AAD 防篡改。JSON payload 首字段 `schema_version` 驱动 `qzh-profile/src/schema_migrate.rs` 迁移链（Strategy B）。当前 `CURRENT_SCHEMA_VERSION = 4`（v1→v2 所有按键字段从裸 `u32` VK 升级为 [`KeyId`]；v2→v3 新增滚轮上 / 下；v3→v4 `BurstRule` 新增可选 `group` 字段——Toggle 互斥分组；均向后兼容自动迁移）。`tauri-plugin-store` 的 settings.json 复用同一迁移基础设施（`packages/migrate`）。
 
@@ -120,26 +120,27 @@ WebView 聚焦时 `WH_KEYBOARD_LL` 全局钩子不触发，面板与浮窗都用
 
 **许可证**：Ed25519 离线校验。私钥仅在 `apps/keygen` 使用，不进主应用二进制。兑换码 `QZHUA-XXXXX-XXXXX-XXXXX-XXXXX`（Base32：64 字节签名 + JSON payload）。payload 含 `issue_time`（防时钟回拨）+ `expiry` + `features u32`（位掩码，见 `license.rs::feature_bits`）。公钥当前为全零占位，发布前替换。
 
-**连发引擎**（`packages/burst-engine`）：`windows_sys` `WH_KEYBOARD_LL` + `WH_MOUSE_LL` 双低级钩子共用同一消息循环线程，监听键盘与鼠标 5 键（左 / 右 / 中 / X1 / X2，含 `WM_XBUTTONDOWN/UP` 高 16 位识别 X1/X2）及滚轮（`WM_MOUSEWHEEL`，每格瞬发 press+release）。按键/按钮注入分四档通道，按用户在设置中选择的优先级生效：
+**连发引擎**（`packages/burst-engine`）：`windows_sys` `WH_KEYBOARD_LL` + `WH_MOUSE_LL` 双低级钩子共用同一消息循环线程，监听键盘与鼠标 5 键（左 / 右 / 中 / X1 / X2，含 `WM_XBUTTONDOWN/UP` 高 16 位识别 X1/X2）及滚轮（`WM_MOUSEWHEEL`，每格瞬发 press+release）。按键/按钮注入分三档通道，按用户在设置中选择的优先级生效：
 
 - **SendInput 默认**（`win-input/src/lib.rs`）：键盘 `SendInput INPUT_KEYBOARD` + `KEYEVENTF_SCANCODE`；鼠标 `INPUT_MOUSE` + `MOUSEEVENTF_*` 标志（X1/X2 用 `MOUSEEVENTF_XDOWN/UP` + `mouseData=XBUTTON1/2`）。`dwExtraInfo = SIM_MARKER` 标记自身注入事件防循环。
 - **Interception 驱动**（`win-input/src/interception.rs`，游戏模式，当前主推）：键盘 + 鼠标设备各扫描一次，鼠标 `InterceptionMouseStroke` 状态位映射 `INTERCEPTION_MOUSE_BUTTON_4/5_DOWN/UP`（X1/X2 走 BUTTON_4/5）。`interception_send` 返回写入 stroke 数，鼠标/滚轮失败回退 SendInput。
 - **DDSimple 驱动**（`win-input/src/ddsimple.rs` + `dd_common.rs`，dd63330）：键盘 `DD_key`，鼠标走 `MOUSE_INPUT_DATA.ButtonFlags`，**原生支持 X1/X2 侧键**。
-- **DD-HID 驱动**（`win-input/src/ddhid.rs` + `dd_common.rs`，ddhid.63340）：**已永久停用**，驱动不稳定会导致蓝屏，`selectInputMode` 一律拦下并提示，不再重新开放。代码保留仅为兼容存量用户的自动回退（`applyAppStatus` 检测到 `dd_hid` 会切回 SendInput）与「诊断修复」里的残留卸载。键盘 `DD_key`，鼠标 `DD_btn`（值域 1=L↓/2=L↑/4=R↓/8=R↑/16=M↓/32=M↑，**X1/X2 不在值域**）。
 
-DD 系列（DDSimple / DD-HID）驱动注入把 `ExtraInformation` 写死为 0，`SIM_MARKER` 无法幸存，自注入回灌改由 `PENDING_INJECTIONS` 时间窗口队列过滤。
+DDSimple 驱动注入把 `ExtraInformation` 写死为 0，`SIM_MARKER` 无法幸存，自注入回灌改由 `PENDING_INJECTIONS` 时间窗口队列过滤。
+
+**DD-HID 已永久移除**（驱动不稳定会导致蓝屏）：注入后端、`InputMode::DdHid`、安装链路与 `ddhid.63340.dll` 全部删除，`InputMode::from_str("dd_hid")` 返回 `None`，存量用户的 `input_mode` 配置在 `collect_configured_input_mode` 自动回落 SendInput。仅保留卸载与残留清理：`win_driver::dd_hid` 的检测与 `uninstall`、`uninstall_dd_hid_driver` 命令、`repair_dd_hid_residue`、诊断报告导出，以及随包分发的 `ddhid-driver/`（`ddc.exe -u` 要用）。
 
 `win_input::dispatch(KeyId, is_up)` 是统一入口，`(mode, KeyId)` 模式匹配分发到对应 backend，X1/X2 在 DD 模式 / 鼠标设备缺失时按 once 旗标 warn 一次后自动回退 SendInput。`burst-engine` 负责线程编排：用 `catch_unwind` 包裹引擎线程，并发连发用 `AtomicBool cancel + thread::park_timeout`，`Drop` 时先 signal 再 join 确保按键不卡住。非 Windows 平台提供空实现（`cfg(windows)` 隔离）。
 
-全局热键（`global_toggle`/`global_stop`/`panel_toggle`）只允许绑定键盘实体键、且三者互不重复——在绑定 UI 拦截（`KeyCapture` 的 `keyboardOnly` + `SettingsDialog` 的去重校验），避免同一键被某个热键抢先处理导致其余功能失效。热键可绑修饰键（左右 Shift / Ctrl / Alt / Win），连发规则不可——判定见下节「按键角色与录入策略」。AltGr 布局（德语 / 法语 / 波兰语等）把右 Alt 当 AltGr，键盘驱动会在它前面补发一个左 Ctrl，低级钩子看到两个独立事件，因此右 Alt 与左 Ctrl 同时绑热键会互相牵连——不做代码过滤（合成 Ctrl 与物理 Ctrl 在钩子层不可靠区分），改由 `SettingsDialog` 在绑定右 Alt 后按是否也绑了左 Ctrl 分两级提示。全局热键不走 `tauri-plugin-global-shortcut` 注册，而是与连发规则共用 `burst-engine` 低级 hook：热键检测优先于规则处理，且不受 `global_enabled` 当前状态限制。引擎用 `pressed_keys: HashSet<KeyId>` 记录已经按下的物理键，只让首次 down 进入 `on_key_press`，up 时移除；不要再依赖 `KBDLLHOOKSTRUCT.flags` 的保留位判断 key-repeat。注入事件仍先在 hook 层过滤：SendInput / Interception 用 `SIM_MARKER`，DD-HID 用 `PENDING_INJECTIONS`。
+全局热键（`global_toggle`/`global_stop`/`panel_toggle`）只允许绑定键盘实体键、且三者互不重复——在绑定 UI 拦截（`KeyCapture` 按槽位允许集收键 + `SettingsDialog` 的去重校验），避免同一键被某个热键抢先处理导致其余功能失效。热键可绑修饰键（左右 Shift / Ctrl / Alt / Win），连发规则不可——判定见下节「按键角色与录入策略」。AltGr 布局（德语 / 法语 / 波兰语等）把右 Alt 当 AltGr，键盘驱动会在它前面补发一个左 Ctrl，低级钩子看到两个独立事件，因此右 Alt 与左 Ctrl 同时绑热键会互相牵连——不做代码过滤（合成 Ctrl 与物理 Ctrl 在钩子层不可靠区分），改由 `SettingsDialog` 在绑定右 Alt 后按是否也绑了左 Ctrl 分两级提示。全局热键不走 `tauri-plugin-global-shortcut` 注册，而是与连发规则共用 `burst-engine` 低级 hook：热键检测优先于规则处理，且不受 `global_enabled` 当前状态限制。引擎用 `pressed_keys: HashSet<KeyId>` 记录已经按下的物理键，只让首次 down 进入 `on_key_press`，up 时移除；不要再依赖 `KBDLLHOOKSTRUCT.flags` 的保留位判断 key-repeat。注入事件仍先在 hook 层过滤：SendInput / Interception 用 `SIM_MARKER`，DDSimple 用 `PENDING_INJECTIONS`。
 
 **按键角色与录入策略**（唯一事实来源：`packages/qzh-profile/src/key_policy.rs`）：
 
-系统里的按键只有两种角色。**读**角色只被低级钩子观察、永不注入（三个全局热键、规则的 `trigger_key` 与 `stop_key`）；**写**角色只经 `win_input::dispatch` 注入、不参与触发判定（`target_key`）。驱动支持只对写角色有意义——DD-HID 注入不了鼠标侧键，但侧键做启动键完全正常。
+系统里的按键只有两种角色。**读**角色只被低级钩子观察、永不注入（三个全局热键、规则的 `trigger_key` 与 `stop_key`）；**写**角色只经 `win_input::dispatch` 注入、不参与触发判定（`target_key`）。驱动支持只对写角色有意义——侧键在 DDSimple 下能注入，但读角色本来就不受注入能力影响。
 
 一个槽位可能同时承担两种角色（默认模式与横版单键模型的连发按键，`trigger == target`），此时受两套约束的**交集**。方向与权限模型的 `rw` 相反：权限枚举「被授予的动作」，角色越多动作越多故取并集；这里枚举「够格的按键」，角色越多要求越多故取交集。`KeySlot` 的四个变体就是这个模型：`Hotkey` / `Trigger` / `Target` / `TriggerTarget`。
 
-限制来自两个源，模块里分开表达。**能力**是后端做不做得到，随输入模式变，由 `InjectCaps` 从 `win-input` 的 `InputMode` 谓词填充（其中 `side_button` 只对已停用的 DD-HID 为假，实际处于休眠状态；真正生效的是 `coincident_toggle`）；**策略**是产品上让不让做（热键禁鼠标、规则禁修饰键），与输入模式无关，写死在模块里。二者都不是对方，混在一起模型会裂：热键槽和启动键槽同为纯读，但前者禁鼠标后者不禁。
+限制来自两个源，模块里分开表达。**能力**是后端做不做得到，随输入模式变，由 `InjectCaps` 从 `win-input` 的 `InputMode` 谓词填充（DD-HID 移除后只剩 `coincident_toggle` 一位；将来若有后端受限，加能力位即可，`SlotPolicy` 会自动跟着变）；**策略**是产品上让不让做（热键禁鼠标、规则禁修饰键），与输入模式无关，写死在模块里。二者都不是对方，混在一起模型会裂：热键槽和启动键槽同为纯读，但前者禁鼠标后者不禁。
 
 DDSimple 下 Toggle 规则的 `TriggerTarget` 是**空集**——`ExtraInformation` 被驱动写死为 0，自注入只能靠时间窗口队列过滤，该队列对重合键无法可靠区分「用户按下」与「自身回灌」。Hold 的重合态仍放行，那份不可靠性是已知且已接受的（见 `win-input/src/lib.rs` 顶部）。横版与 DD 互斥的根就在这里：横版每个键位都是重合态，故 `switchLayout` 直接以 `coincident_toggle` 为准，不再按模式名硬判。全面互斥仍带一层产品简化（Hold 的重合态其实允许），不是纯从模型推出来的。
 

@@ -12,18 +12,10 @@ fn ms(btn: MouseButton) -> KeyId {
 const RIGHT_ALT: u32 = 0xa5;
 const KEY_Q: u32 = 0x51;
 
-fn dd_hid() -> InjectCaps {
+/// 不支持自注入过滤的后端（DDSimple），Toggle 重合态为空集。
+fn no_coincident() -> InjectCaps {
     InjectCaps {
-        side_button: false,
         coincident_toggle: false,
-    }
-}
-
-/// 只收紧侧键、保留重合态，用于把两条约束分开验证。
-fn no_side_button() -> InjectCaps {
-    InjectCaps {
-        side_button: false,
-        coincident_toggle: true,
     }
 }
 
@@ -90,47 +82,11 @@ fn hotkey_slot_rejects_every_mouse_button() {
     }
 }
 
-#[test]
-fn side_button_readable_but_not_injectable_under_dd_hid() {
-    // 读角色不受注入能力影响：DD-HID 下侧键仍可做启动键。
-    assert!(accepts(KeySlot::Trigger, ms(MouseButton::X1), no_side_button()).is_ok());
-    // 写角色受限，重合态因为也写所以同样受限。
-    for slot in [KeySlot::Target, KeySlot::TriggerTarget] {
-        assert_eq!(
-            accepts(slot, ms(MouseButton::X1), no_side_button()),
-            Err(KeyRejection::SideButtonNotInjectable),
-            "{slot:?}"
-        );
-    }
-}
-
-#[test]
-fn side_button_injectable_when_backend_supports_it() {
-    let caps = InjectCaps::default();
-    for slot in [KeySlot::Target, KeySlot::TriggerTarget] {
-        assert!(accepts(slot, ms(MouseButton::X1), caps).is_ok(), "{slot:?}");
-        assert!(accepts(slot, ms(MouseButton::X2), caps).is_ok(), "{slot:?}");
-    }
-}
-
-#[test]
-fn non_side_mouse_buttons_unaffected_by_backend_caps() {
-    for btn in [
-        MouseButton::Left,
-        MouseButton::Right,
-        MouseButton::Middle,
-        MouseButton::WheelUp,
-        MouseButton::WheelDown,
-    ] {
-        assert!(accepts(KeySlot::Target, ms(btn), no_side_button()).is_ok(), "{btn:?}");
-    }
-}
-
 // ── 重合态取交集，不是并集 ───────────────────────────────────────────────────
 
 #[test]
 fn coincident_slot_is_intersection_of_read_and_write() {
-    let caps = no_side_button();
+    let caps = InjectCaps::default();
     for btn in ALL_MOUSE_BUTTONS {
         let readable = accepts(KeySlot::Trigger, ms(btn), caps).is_ok();
         let writable = accepts(KeySlot::Target, ms(btn), caps).is_ok();
@@ -143,7 +99,7 @@ fn coincident_slot_is_intersection_of_read_and_write() {
 
 #[test]
 fn slot_policy_matches_accepts() {
-    for caps in [InjectCaps::default(), no_side_button()] {
+    for caps in [InjectCaps::default(), InjectCaps::default()] {
         for slot in [
             KeySlot::Hotkey,
             KeySlot::Trigger,
@@ -174,16 +130,6 @@ fn hotkey_policy_allows_modifiers_and_no_mouse() {
     assert!(p.mouse.is_empty());
 }
 
-#[test]
-fn dd_hid_target_policy_drops_side_buttons_only() {
-    let p = slot_policy(KeySlot::Target, no_side_button());
-    assert!(!p.modifiers);
-    assert!(!p.mouse.contains(&MouseButton::X1));
-    assert!(!p.mouse.contains(&MouseButton::X2));
-    assert!(p.mouse.contains(&MouseButton::Left));
-    assert!(p.mouse.contains(&MouseButton::WheelUp));
-}
-
 // ── 规则里的槽位归属 ─────────────────────────────────────────────────────────
 
 #[test]
@@ -201,7 +147,11 @@ fn same_trigger_and_target_is_coincident() {
 
 #[test]
 fn stop_key_equal_to_target_is_coincident() {
-    let r = rule(kb(KEY_Q), ms(MouseButton::Left), Some(ms(MouseButton::Left)));
+    let r = rule(
+        kb(KEY_Q),
+        ms(MouseButton::Left),
+        Some(ms(MouseButton::Left)),
+    );
     assert_eq!(slot_of(&r, ms(MouseButton::Left)), KeySlot::TriggerTarget);
 }
 
@@ -217,24 +167,10 @@ fn explicit_stop_key_is_read_only() {
 fn rule_violation_found_for_modifier_target() {
     let rules = vec![rule(kb(KEY_Q), kb(RIGHT_ALT), None)];
     let found = find_rule_violations(&rules, InjectCaps::default());
-    assert_eq!(found, vec![("r1".to_string(), KeyRejection::ModifierNotAllowed)]);
-}
-
-#[test]
-fn rule_violation_found_for_side_button_target_under_dd_hid() {
-    let rules = vec![rule(kb(KEY_Q), ms(MouseButton::X1), None)];
-    let found = find_rule_violations(&rules, no_side_button());
     assert_eq!(
         found,
-        vec![("r1".to_string(), KeyRejection::SideButtonNotInjectable)]
+        vec![("r1".to_string(), KeyRejection::ModifierNotAllowed)]
     );
-}
-
-#[test]
-fn side_button_trigger_is_not_a_violation_under_dd_hid() {
-    // 侧键做启动键只被读，不经注入通道，不该被拦。
-    let rules = vec![rule(ms(MouseButton::X1), kb(KEY_Q), None)];
-    assert!(find_rule_violations(&rules, no_side_button()).is_empty());
 }
 
 #[test]
@@ -362,25 +298,13 @@ fn sanitize_reports_nothing_for_clean_profile() {
     assert_eq!(p.hotkeys.global_toggle, Some(kb(RIGHT_ALT)));
 }
 
-#[test]
-fn sanitize_respects_backend_caps() {
-    let mut p = profile_with(vec![rule(kb(KEY_Q), ms(MouseButton::X1), None)], Hotkeys::default());
-    // 宽松能力下侧键目标合法，不动。
-    assert!(sanitize_profile(&mut p, InjectCaps::default()).is_empty());
-    assert!(p.rules[0].enabled);
-    // DD-HID 能力下注入不了侧键，停用。
-    let report = sanitize_profile(&mut p, no_side_button());
-    assert_eq!(report.disabled_rules.len(), 1);
-    assert!(!p.rules[0].enabled);
-}
-
 // ── DD 下 Toggle 的重合态是空集 ──────────────────────────────────────────────
 
 #[test]
 fn dd_rejects_coincident_toggle_regardless_of_key() {
     for key in [kb(KEY_Q), ms(MouseButton::Left)] {
         let rules = vec![rule(key, key, None)];
-        let found = find_rule_violations(&rules, dd_hid());
+        let found = find_rule_violations(&rules, no_coincident());
         assert_eq!(
             found,
             vec![("r1".to_string(), KeyRejection::CoincidentToggleUnsupported)],
@@ -392,7 +316,7 @@ fn dd_rejects_coincident_toggle_regardless_of_key() {
 #[test]
 fn dd_rejects_toggle_stop_key_equal_to_target() {
     let rules = vec![rule(kb(KEY_Q), kb(0x52), Some(kb(0x52)))];
-    let found = find_rule_violations(&rules, dd_hid());
+    let found = find_rule_violations(&rules, no_coincident());
     assert_eq!(
         found,
         vec![("r1".to_string(), KeyRejection::CoincidentToggleUnsupported)]
@@ -404,11 +328,21 @@ fn dd_allows_coincident_hold() {
     // Hold 的重合态不可靠但已被接受，不该拦。
     let mut r = rule(kb(KEY_Q), kb(KEY_Q), None);
     r.mode = BurstMode::Hold;
-    assert!(find_rule_violations(&[r], dd_hid()).is_empty());
+    assert!(find_rule_violations(&[r], no_coincident()).is_empty());
 }
 
 #[test]
 fn dd_allows_toggle_with_distinct_keys() {
     let rules = vec![rule(kb(KEY_Q), kb(0x52), None)];
-    assert!(find_rule_violations(&rules, dd_hid()).is_empty());
+    assert!(find_rule_violations(&rules, no_coincident()).is_empty());
+}
+
+#[test]
+fn every_mouse_button_is_injectable_on_current_backends() {
+    // DD-HID 退役后已无值域缺口的后端，写角色接受全部鼠标按钮与滚轮。
+    for caps in [InjectCaps::default(), no_coincident()] {
+        for btn in ALL_MOUSE_BUTTONS {
+            assert!(accepts(KeySlot::Target, ms(btn), caps).is_ok(), "{btn:?}");
+        }
+    }
 }

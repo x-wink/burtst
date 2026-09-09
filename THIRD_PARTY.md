@@ -21,18 +21,15 @@ Interception 驱动为可选组件，对应输入模式「游戏模式」。默�
 - 用途：虚拟键鼠驱动，作为「游戏模式」之外的备用输入通道，兼容部分游戏模式仍无效的程序
 - 集成方式（按原作者发布的二进制原样打包，未做修改或重新签名）：
   - `apps/main/src-tauri/resources/dd63330.dll` — 「DD驱动」模式使用的 DD DLL
-  - `apps/main/src-tauri/resources/ddhid.63340.dll` — DDHID 用户态 DLL（当前模式入口已暂停）
-  - `apps/main/src-tauri/resources/ddhid-driver/` — DD-HID 驱动包：
-    - `ddc.exe` — PnP 安装/卸载工具
+  - `apps/main/src-tauri/resources/ddhid-driver/` — DD-HID 驱动包，仅用于卸载存量安装：
+    - `ddc.exe` — PnP 卸载工具
     - `ddhid63340.sys` / `ddhid63340.cat` / `ddhid63340.inf` — WHQL 签名的 HID-Class 驱动
 - 运行时仅通过 `LoadLibraryW` + `GetProcAddress` 调用 DD SDK 导出函数：`DD_btn`、`DD_key`、`DD_todc`、`DD_whl`
 
 ### 说明
 
-「DD驱动」模式使用 `dd63330.dll`，独立于 DDHID 驱动安装/卸载链路，要求宿主进程以管理员身份运行。
+「DD驱动」模式使用 `dd63330.dll`，要求宿主进程以管理员身份运行。DD 驱动无法标识自身注入的按键，因此「目标键」不能与「触发键 / 停止键」重合于切换连发规则，本软件已在配置校验和模式切换处强制此约束。
 
-DDHID 模式（面板入口名称「DDHID」）为可选组件，但因稳定性风险当前已暂停开放；如系统中已安装 DDHID 驱动，建议在应用「诊断修复」中卸载。
-
-DDHID 驱动无法标识自身注入的按键，因此使用DDHID 模式时「目标键」不能与「触发键 / 停止键」重合，本软件已在配置校验和模式切换处强制此约束。「DD驱动」模式不继承该同键限制。
+DDHID 模式因稳定性风险（可能导致蓝屏）已永久移除，安装链路与用户态 DLL 均已删除。驱动包保留在安装目录仅为卸载存量安装：如系统中已安装 DDHID 驱动，请在应用「诊断修复」中卸载。
 
 如对 DD 驱动的来源、签名或行为有疑问，请以原作者仓库说明为准。

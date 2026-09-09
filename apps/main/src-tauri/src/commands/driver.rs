@@ -6,14 +6,6 @@ use serde::Serialize;
 #[allow(unused_imports)]
 use tauri::{AppHandle, Manager};
 
-/// DD-HID 安装结果。`pending_reboot=true` 表示 Windows PnP 报告驱动文件已更新
-/// 并建议重启以确保完全生效（`ERROR_SUCCESS_REBOOT_REQUIRED`, 0xBC3）；
-/// 实测驱动在重启前通常已可正常工作。
-#[derive(Debug, Clone, Serialize)]
-pub struct DdHidInstallOutcome {
-    pub pending_reboot: bool,
-}
-
 /// 卸载结果。`pending_reboot=true` 表示驱动文件已标记为重启删除、卸载在逻辑上
 /// 已完成，但物理文件要等下次开机才消失。
 #[derive(Debug, Clone, Serialize)]
@@ -101,57 +93,10 @@ pub async fn uninstall_driver(app: AppHandle) -> Result<(), String> {
     }
 }
 
+/// DD-HID 已永久停用，此处只为「诊断修复」展示存量安装状态、引导用户卸载。
 #[tauri::command]
 pub fn is_dd_hid_driver_installed() -> bool {
     win_driver::dd_hid::dd_hid_sys_installed()
-}
-
-#[tauri::command]
-pub async fn install_dd_hid_driver(app: AppHandle) -> Result<DdHidInstallOutcome, String> {
-    #[cfg(windows)]
-    {
-        let res_dir = resource_dir(&app)?;
-        let health = crate::commands::resource_integrity::check_resources(&res_dir);
-        if !health.issues.is_empty() {
-            let details = health
-                .issues
-                .iter()
-                .map(crate::commands::resource_integrity::issue_label)
-                .collect::<Vec<_>>()
-                .join("；");
-            return Err(format!(
-                "驱动资源文件校验失败，拒绝安装以防提权执行被篡改文件：{details}"
-            ));
-        }
-        let install_result = win_driver::dd_hid::install(&res_dir).await;
-        // pending_reboot=true 表示 ddc.exe 返回 0xBC3，驱动已装但 PnP 建议重启
-        let pending_reboot = matches!(install_result, Ok(true));
-        let exe_result: Result<(), String> = install_result.map(|_| ());
-        let sys_installed = win_driver::dd_hid::dd_hid_sys_installed();
-        let service_present = win_sysinfo::registry::service_key_present("ddhid63340");
-        let judge = win_driver::judge::judge_install_result(
-            sys_installed,
-            service_present,
-            exe_result.clone(),
-        );
-        if let Err(ref e) = judge {
-            let exe_state = match &exe_result {
-                Ok(()) => "ddc.exe 报告成功".to_string(),
-                Err(msg) => format!("ddc.exe 失败: {msg}"),
-            };
-            tracing::error!(
-                "DD-HID 驱动安装失败：{e}（{exe_state}，sys 落盘={sys_installed}，服务键={service_present}）"
-            );
-            return Err(e.clone());
-        }
-        crate::commands::status::emit_status_changed(&app);
-        Ok(DdHidInstallOutcome { pending_reboot })
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        Err("仅 Windows 平台支持安装 DD-HID 驱动".to_string())
-    }
 }
 
 #[tauri::command]

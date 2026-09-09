@@ -199,9 +199,7 @@ pub(crate) fn sanitize_and_record(app: &AppHandle, profile: &mut Profile) -> boo
 
 /// 取走待提醒的净化结果。前端挂载时调用一次；取走即清空，不重复弹窗。
 #[tauri::command]
-pub fn take_profile_notice(
-    state: State<ProfileNotice>,
-) -> Option<qzh_profile::SanitizeReport> {
+pub fn take_profile_notice(state: State<ProfileNotice>) -> Option<qzh_profile::SanitizeReport> {
     state.0.lock().ok().and_then(|mut slot| slot.take())
 }
 

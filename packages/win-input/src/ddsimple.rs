@@ -15,7 +15,7 @@
 //! 已整体移除，不要重新引入。
 #![cfg(windows)]
 
-use crate::dd_common::{DdFfi, DdSideButtonMode};
+use crate::dd_common::DdFfi;
 use qzh_profile::key_id::MouseButton;
 use std::path::Path;
 use tracing::info;
@@ -31,7 +31,7 @@ impl DdSimpleBackend {
     pub fn new(resources_dir: &Path) -> Option<Self> {
         let dll = resources_dir.join(DLL_NAME);
         // DLL 加载失败 = 驱动未安装，整体不可用
-        let ffi = DdFfi::load(&dll, DdSideButtonMode::SimpleMouseInputDataFlags)?;
+        let ffi = DdFfi::load(&dll)?;
         info!("DD Simple 后端初始化成功（自注入由 PENDING_INJECTIONS 过滤）");
         Some(Self { ffi })
     }

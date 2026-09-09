@@ -1,4 +1,4 @@
-﻿//! 规则 CRUD + 输入模式切换 + 按键捕获。驱动管理已迁至 [`super::driver`]。
+//! 规则 CRUD + 输入模式切换 + 按键捕获。驱动管理已迁至 [`super::driver`]。
 
 use crate::engine::BurstEngine;
 use qzh_profile::key_policy::{slot_policy, KeySlot, SlotPolicy};
@@ -89,7 +89,6 @@ pub(crate) fn current_inject_caps() -> InjectCaps {
 #[cfg(windows)]
 pub(crate) fn caps_for_mode(mode: win_input::InputMode) -> InjectCaps {
     InjectCaps {
-        side_button: !mode.forbids_side_button_target(),
         coincident_toggle: !mode.requires_distinct_target_for_toggle(),
     }
 }
@@ -101,9 +100,6 @@ pub(crate) fn rejection_message(reason: KeyRejection, mode_label: &str) -> Strin
             "的按键是修饰键。修饰键只能绑定全局热键，请换其它按键。".to_string()
         }
         KeyRejection::MouseNotAllowed => "的按键不支持鼠标按键。".to_string(),
-        KeyRejection::SideButtonNotInjectable => {
-            format!("的连发按键是鼠标侧键，{mode_label} 模式无法注入。请改用左 / 右 / 中键或键盘键。")
-        }
         KeyRejection::CoincidentToggleUnsupported => format!(
             "是切换连发，且启动 / 停止键与连发按键相同，{mode_label} 模式不支持。请在高级设置里把连发按键改成另一个键。"
         ),
@@ -244,7 +240,6 @@ fn input_mode_label(mode: win_input::InputMode) -> &'static str {
         win_input::InputMode::SendInput => "通用模式",
         win_input::InputMode::Interception => "游戏模式",
         win_input::InputMode::DdSimple => "DD驱动",
-        win_input::InputMode::DdHid => "DDHID",
     }
 }
 
@@ -260,7 +255,10 @@ fn check_rules_for_mode(rules: &[BurstRule], mode: win_input::InputMode) -> Resu
         .into_iter()
         .next()
     {
-        return Err(format!("规则「{rule}」{}", rejection_message(reason, label)));
+        return Err(format!(
+            "规则「{rule}」{}",
+            rejection_message(reason, label)
+        ));
     }
     Ok(())
 }

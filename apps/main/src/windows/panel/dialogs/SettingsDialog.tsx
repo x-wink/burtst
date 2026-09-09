@@ -20,7 +20,7 @@ import { SECT_PRESETS, type ThemeMode, type ThemeSettings } from '../theme';
 import './SettingsDialog.css';
 
 export type SettingsTab = 'general' | 'hotkeys' | 'sound' | 'profiles';
-type SettingsInputMode = 'sendinput' | 'interception' | 'ddsimple' | 'dd_hid';
+type SettingsInputMode = 'sendinput' | 'interception' | 'ddsimple';
 type DriverStatus = 'installed' | 'pending_reboot' | 'not_installed';
 
 /** 四个播报时机，也是 `${slot}Text` / `${slot}Source` 等字段的前缀。 */
@@ -133,14 +133,12 @@ const INPUT_MODE_LABELS: Record<SettingsInputMode, string> = {
   sendinput: '通用模式',
   interception: '游戏模式',
   ddsimple: 'DD驱动',
-  dd_hid: 'DDHID',
 };
 
 const INPUT_MODE_HINTS: Record<SettingsInputMode, string> = {
   sendinput: 'SendInput',
   interception: 'Interception',
   ddsimple: 'DD驱动',
-  dd_hid: 'DDHID',
 };
 
 const CLOSE_BEHAVIOR_OPTIONS: {
@@ -188,8 +186,7 @@ function modeTag(mode: SettingsInputMode): { text: string; kind: 'recommend' | '
   return null;
 }
 
-/// 可选输入模式：游戏模式置顶主推，通用模式次之，DD驱动仅作备用。DDHID 已禁用、不列出
-/// （后端上报 dd_hid 会被自动回退为通用模式，故界面永不停留在 DDHID）。
+/// 可选输入模式：游戏模式置顶主推，通用模式次之，DD驱动仅作备用。
 const SELECTABLE_INPUT_MODES: SettingsInputMode[] = ['interception', 'sendinput', 'ddsimple'];
 
 function SliderRow({
@@ -478,8 +475,7 @@ export default function SettingsDialog(props: Props) {
                 {SELECTABLE_INPUT_MODES.map((mode) => {
                   const tag = modeTag(mode);
                   // DD 系列与横版键鼠图互斥：横版下禁用 DD 驱动选项。
-                  const ddBlocked =
-                    props.layout === 'horizontal' && (mode === 'ddsimple' || mode === 'dd_hid');
+                  const ddBlocked = props.layout === 'horizontal' && mode === 'ddsimple';
                   return (
                     <CardListButton
                       key={mode}
@@ -506,8 +502,8 @@ export default function SettingsDialog(props: Props) {
                 })}
               </CardList>
               <p className="settings-note settings-note-warn">
-                ⚠️ DD 驱动（含 DDHID）可能无法正确停止连发、甚至自行停止连发，已不再推荐。DDHID
-                已禁用；DD驱动仅在「游戏模式」不可用时作为备用。优先使用游戏模式。
+                ⚠️ DD 驱动可能无法正确停止连发、甚至自行停止连发，仅在「游戏模式」不可用时作为备用。
+                优先使用游戏模式。
               </p>
               <p className="settings-note">驱动安装与卸载操作请前往「诊断修复」。</p>
             </SettingsSection>

@@ -6,14 +6,12 @@
 #[cfg(windows)]
 mod dd_common;
 #[cfg(windows)]
-pub mod ddhid;
 #[cfg(windows)]
 pub mod ddsimple;
 #[cfg(windows)]
 pub mod interception;
 
 #[cfg(windows)]
-use ddhid::DdHidBackend;
 #[cfg(windows)]
 use ddsimple::DdSimpleBackend;
 #[cfg(windows)]
@@ -214,7 +212,6 @@ pub enum InputMode {
     Interception,
     #[serde(rename = "ddsimple")]
     DdSimple,
-    DdHid,
 }
 
 #[cfg(windows)]
@@ -225,7 +222,6 @@ impl InputMode {
             "sendinput" => Some(Self::SendInput),
             "interception" => Some(Self::Interception),
             "ddsimple" | "dd_simple" => Some(Self::DdSimple),
-            "dd_hid" => Some(Self::DdHid),
             _ => None,
         }
     }
@@ -235,7 +231,6 @@ impl InputMode {
             Self::SendInput => "sendinput",
             Self::Interception => "interception",
             Self::DdSimple => "ddsimple",
-            Self::DdHid => "dd_hid",
         }
     }
 
@@ -244,13 +239,7 @@ impl InputMode {
     /// `target == trigger / stop` 的 Toggle 规则无法可靠区分「用户真实按下停止键」与
     /// 「自身注入回灌」，会导致连发自停或停不掉。故 DD 系列禁止 Toggle 目标键与启动/停止键相同。
     pub fn requires_distinct_target_for_toggle(&self) -> bool {
-        matches!(self, Self::DdHid | Self::DdSimple)
-    }
-
-    /// 鼠标侧键（X1/X2）作为目标键是否被禁止。仅 DD-HID（63340 `DD_btn` 不支持侧键值域）
-    /// 受限；DDSimple 的 `dd63330` 走 `MOUSE_INPUT_DATA.ButtonFlags`，原生支持 X1/X2。
-    pub fn forbids_side_button_target(&self) -> bool {
-        matches!(self, Self::DdHid)
+        matches!(self, Self::DdSimple)
     }
 
     pub fn requires_admin(&self) -> bool {
@@ -261,7 +250,6 @@ impl InputMode {
 #[cfg(windows)]
 static INTERCEPTION_BACKEND: OnceLock<Mutex<Option<InterceptionBackend>>> = OnceLock::new();
 #[cfg(windows)]
-static DD_HID_BACKEND: OnceLock<Mutex<Option<DdHidBackend>>> = OnceLock::new();
 #[cfg(windows)]
 static DD_SIMPLE_BACKEND: OnceLock<Mutex<Option<DdSimpleBackend>>> = OnceLock::new();
 #[cfg(windows)]
@@ -283,7 +271,6 @@ const MODE_SENDINPUT: u8 = 0;
 #[cfg(any(test, windows))]
 const MODE_INTERCEPTION: u8 = 1;
 #[cfg(any(test, windows))]
-const MODE_DD_HID: u8 = 2;
 #[cfg(any(test, windows))]
 const MODE_DD_SIMPLE: u8 = 3;
 
@@ -291,7 +278,6 @@ const MODE_DD_SIMPLE: u8 = 3;
 fn u8_to_mode(v: u8) -> InputMode {
     match v {
         MODE_INTERCEPTION => InputMode::Interception,
-        MODE_DD_HID => InputMode::DdHid,
         MODE_DD_SIMPLE => InputMode::DdSimple,
         _ => InputMode::SendInput,
     }
@@ -310,9 +296,6 @@ enum DispatchRoute {
     InterceptionKeyboard(u32),
     InterceptionWheel { up: bool },
     InterceptionMouse(MouseButton),
-    DdHidKeyboard(u32),
-    DdHidWheel { up: bool },
-    DdHidMouse(MouseButton),
     DdSimpleKeyboard(u32),
     DdSimpleWheel { up: bool },
     DdSimpleMouse(MouseButton),
@@ -332,17 +315,6 @@ fn resolve_route(mode: u8, key: KeyId, is_up: bool) -> DispatchRoute {
             }
         }
         (MODE_INTERCEPTION, KeyId::Mouse(btn)) => DispatchRoute::InterceptionMouse(btn),
-        (MODE_DD_HID, KeyId::Keyboard(vk)) => DispatchRoute::DdHidKeyboard(vk),
-        (MODE_DD_HID, KeyId::Mouse(btn)) if is_wheel_button(btn) => {
-            if is_up {
-                DispatchRoute::Noop
-            } else {
-                DispatchRoute::DdHidWheel {
-                    up: matches!(btn, MouseButton::WheelUp),
-                }
-            }
-        }
-        (MODE_DD_HID, KeyId::Mouse(btn)) => DispatchRoute::DdHidMouse(btn),
         (MODE_DD_SIMPLE, KeyId::Keyboard(vk)) => DispatchRoute::DdSimpleKeyboard(vk),
         (MODE_DD_SIMPLE, KeyId::Mouse(btn)) if is_wheel_button(btn) => {
             if is_up {
@@ -388,25 +360,6 @@ pub fn init_backend(mode: InputMode) {
                 warn!("Interception 驱动未安装，降级为 SendInput 模式");
             }
         }
-        InputMode::DdHid => {
-            let Some(dir) = RESOURCES_DIR.get() else {
-                warn!("DD-HID 切换失败：资源目录未注册");
-                current.store(MODE_SENDINPUT, std::sync::atomic::Ordering::SeqCst);
-                return;
-            };
-            let cell = DD_HID_BACKEND.get_or_init(|| Mutex::new(DdHidBackend::new(dir)));
-            let mut guard = revive(cell.lock());
-            if guard.is_none() {
-                *guard = DdHidBackend::new(dir);
-            }
-            if guard.is_some() {
-                current.store(MODE_DD_HID, std::sync::atomic::Ordering::SeqCst);
-                info!("输入后端已切换为 DD-HID 模式");
-            } else {
-                current.store(MODE_SENDINPUT, std::sync::atomic::Ordering::SeqCst);
-                warn!("DD-HID 加载失败，降级为 SendInput 模式");
-            }
-        }
         InputMode::DdSimple => {
             let Some(dir) = RESOURCES_DIR.get() else {
                 warn!("DD Simple 切换失败：资源目录未注册");
@@ -427,11 +380,6 @@ pub fn init_backend(mode: InputMode) {
             }
         }
         InputMode::SendInput => {
-            if let Some(lock) = DD_HID_BACKEND.get() {
-                if revive(lock.lock()).take().is_some() {
-                    info!("DD-HID 后端已释放");
-                }
-            }
             if let Some(lock) = DD_SIMPLE_BACKEND.get() {
                 if revive(lock.lock()).take().is_some() {
                     info!("DD Simple 后端已释放");
@@ -467,10 +415,6 @@ pub enum InputMode {
 #[cfg(not(windows))]
 impl InputMode {
     pub fn requires_distinct_target_for_toggle(&self) -> bool {
-        false
-    }
-
-    pub fn forbids_side_button_target(&self) -> bool {
         false
     }
 
@@ -681,78 +625,6 @@ fn dispatch(key: KeyId, is_up: bool) -> DispatchResult {
             }
             send_via_sendinput(key, is_up)
         }
-        DispatchRoute::DdHidKeyboard(vk) => {
-            let mut backend_seen = false;
-            if let Some(lock) = DD_HID_BACKEND.get() {
-                if let Some(backend) = revive(lock.lock()).as_ref() {
-                    backend_seen = true;
-                    log_dd_route("DD-HID", is_up, key);
-                    record_injection(key, is_up);
-                    if backend.send_key(vk, is_up) {
-                        record_relay_injection(key, is_up);
-                        return DispatchResult::Sent;
-                    }
-                    // DD 注入失败（VK 无映射 / 驱动拒绝）→ 撤销预登记，回退 SendInput，
-                    // 与鼠标路由对称，避免按键被直接丢弃。
-                    try_consume_injection(key, is_up);
-                }
-            }
-            if !backend_seen && !DD_FALLBACK_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                warn!("当前模式 DD-HID 但后端不存在，回退 SendInput");
-            }
-            send_via_sendinput(key, is_up)
-        }
-        DispatchRoute::DdHidWheel { up } => {
-            if let Some(lock) = DD_HID_BACKEND.get() {
-                if let Some(backend) = revive(lock.lock()).as_ref() {
-                    log_dd_route("DD-HID", false, key);
-                    record_injection(key, false);
-                    if backend.send_wheel(up) {
-                        record_relay_injection(key, false);
-                        return DispatchResult::Sent;
-                    }
-                    try_consume_injection(key, false);
-                }
-            }
-            if !DD_FALLBACK_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                warn!("当前模式 DD-HID 但滚轮回退 SendInput");
-            }
-            let result = if unsafe { send_wheel_via_sendinput(up) } {
-                DispatchResult::FallbackSent
-            } else {
-                DispatchResult::Failed
-            };
-            if result.was_sent() {
-                record_relay_injection(key, false);
-            }
-            result
-        }
-        DispatchRoute::DdHidMouse(btn) => {
-            let mut backend_seen = false;
-            if let Some(lock) = DD_HID_BACKEND.get() {
-                if let Some(backend) = revive(lock.lock()).as_ref() {
-                    backend_seen = true;
-                    log_dd_route("DD-HID", is_up, key);
-                    // 先登记再发送：hook 可能在 send_mouse 返回前就收到 LL 事件，
-                    // 若顺序颠倒会把模拟事件误判为物理输入触发连发或停止连发。
-                    // 若 DD 不支持此按钮（X1/X2）会返回 false，随即撤销登记，
-                    // 避免 50ms TTL 内把后续物理 X1/X2 事件误消费。
-                    record_injection(key, is_up);
-                    if backend.send_mouse(btn, is_up) {
-                        record_relay_injection(key, is_up);
-                        return DispatchResult::Sent;
-                    }
-                    // DD 不支持（X1/X2）→ 回退 SendInput（SIM_MARKER 路径），撤销预登记
-                    try_consume_injection(key, is_up);
-                }
-            }
-            if !backend_seen && !DD_FALLBACK_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                warn!("当前模式 DD-HID 但后端不存在，回退 SendInput");
-            }
-            send_via_sendinput(key, is_up)
-        }
         DispatchRoute::DdSimpleKeyboard(vk) => {
             let mut backend_seen = false;
             if let Some(lock) = DD_SIMPLE_BACKEND.get() {
@@ -889,7 +761,6 @@ mod tests {
         assert!(!InputMode::SendInput.requires_admin());
         assert!(InputMode::Interception.requires_admin());
         assert!(InputMode::DdSimple.requires_admin());
-        assert!(InputMode::DdHid.requires_admin());
     }
 
     #[cfg(windows)]
@@ -898,22 +769,12 @@ mod tests {
         // DD 系列驱动注入无法携带 SIM_MARKER（驱动清零 ExtraInformation），
         // 同键 Toggle 无法可靠区分自注入与物理停止键，故两者都禁止。
         assert!(InputMode::DdSimple.requires_distinct_target_for_toggle());
-        assert!(InputMode::DdHid.requires_distinct_target_for_toggle());
         // 非 DD 系列不受限。
         assert!(!InputMode::SendInput.requires_distinct_target_for_toggle());
         assert!(!InputMode::Interception.requires_distinct_target_for_toggle());
     }
 
     #[cfg(windows)]
-    #[test]
-    fn only_ddhid_forbids_side_button_target() {
-        // DDSimple 的 dd63330 走 MOUSE_INPUT_DATA.ButtonFlags，原生支持 X1/X2 侧键。
-        assert!(InputMode::DdHid.forbids_side_button_target());
-        assert!(!InputMode::DdSimple.forbids_side_button_target());
-        assert!(!InputMode::SendInput.forbids_side_button_target());
-        assert!(!InputMode::Interception.forbids_side_button_target());
-    }
-
     #[test]
     fn interception_wheel_down_routes_to_wheel_backend() {
         assert_eq!(
@@ -951,30 +812,6 @@ mod tests {
         assert_eq!(
             resolve_route(MODE_INTERCEPTION, mouse(MouseButton::X2), true),
             DispatchRoute::InterceptionMouse(MouseButton::X2)
-        );
-    }
-
-    #[test]
-    fn dd_hid_wheel_routes_to_wheel_backend() {
-        assert_eq!(
-            resolve_route(MODE_DD_HID, mouse(MouseButton::WheelDown), false),
-            DispatchRoute::DdHidWheel { up: false }
-        );
-        assert_eq!(
-            resolve_route(MODE_DD_HID, mouse(MouseButton::WheelUp), false),
-            DispatchRoute::DdHidWheel { up: true }
-        );
-    }
-
-    #[test]
-    fn dd_hid_wheel_release_is_noop() {
-        assert_eq!(
-            resolve_route(MODE_DD_HID, mouse(MouseButton::WheelDown), true),
-            DispatchRoute::Noop
-        );
-        assert_eq!(
-            resolve_route(MODE_DD_HID, mouse(MouseButton::WheelUp), true),
-            DispatchRoute::Noop
         );
     }
 

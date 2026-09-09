@@ -67,8 +67,6 @@ impl KeySlot {
 /// 当前输入后端的注入能力。由 `win-input` 的 `InputMode` 谓词填充。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InjectCaps {
-    /// 能否注入鼠标侧键 X1 / X2。DD-HID 的 `DD_btn` 值域不含侧键，为 false。
-    pub side_button: bool,
     /// 能否可靠过滤自注入，从而允许 Toggle 规则进入重合态。
     ///
     /// DD 系列把 `ExtraInformation` 写死为 0，`SIM_MARKER` 无法幸存，自注入只能靠时间
@@ -82,7 +80,6 @@ impl Default for InjectCaps {
     /// 无后端信息时按最宽松处理，交由运行时回退兜底。
     fn default() -> Self {
         Self {
-            side_button: true,
             coincident_toggle: true,
         }
     }
@@ -96,8 +93,6 @@ pub enum KeyRejection {
     ModifierNotAllowed,
     /// 该槽位不接受鼠标按键与滚轮（当前仅全局热键如此）。
     MouseNotAllowed,
-    /// 当前输入模式注入不了鼠标侧键。
-    SideButtonNotInjectable,
     /// 当前输入模式不支持 Toggle 规则的启动 / 停止键与连发按键相同。
     CoincidentToggleUnsupported,
 }
@@ -115,12 +110,10 @@ pub fn accepts(slot: KeySlot, key: KeyId, caps: InjectCaps) -> Result<(), KeyRej
             if slot == KeySlot::Hotkey {
                 return Err(KeyRejection::MouseNotAllowed);
             }
-            if slot.injects()
-                && !caps.side_button
-                && matches!(btn, MouseButton::X1 | MouseButton::X2)
-            {
-                return Err(KeyRejection::SideButtonNotInjectable);
-            }
+            // 现存后端（SendInput / Interception / DDSimple）都注入得了全部鼠标按钮与滚轮。
+            // 唯一有值域缺口的是已停用的 DD-HID，随其一并移除；将来若有后端受限，
+            // 在 InjectCaps 加能力位并在此判定即可，SlotPolicy 会自动跟着变。
+            let _ = (btn, caps);
             Ok(())
         }
     }
@@ -190,10 +183,7 @@ pub fn slot_of(rule: &BurstRule, key: KeyId) -> KeySlot {
 /// 与 [`sanitize_hotkeys`] 的处置方式刻意不同：违规热键会被清空，因为一个绑到鼠标左键的
 /// 全局开关会让每次点击都切换连发、应用直接不可用；违规规则只被报出来不被改写，因为影响
 /// 范围止于该条规则，用户在界面上看得见也改得掉，静默禁用反而更像 bug。
-pub fn find_rule_violations(
-    rules: &[BurstRule],
-    caps: InjectCaps,
-) -> Vec<(String, KeyRejection)> {
+pub fn find_rule_violations(rules: &[BurstRule], caps: InjectCaps) -> Vec<(String, KeyRejection)> {
     let mut out = Vec::new();
     for rule in rules.iter().filter(|r| r.enabled) {
         let stop = rule.stop_key.unwrap_or(rule.trigger_key);

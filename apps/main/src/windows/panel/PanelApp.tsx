@@ -164,7 +164,7 @@ const DEFAULT_INTERVAL_MS = 10;
 const MAX_INTERVAL_MS = 10000;
 
 type BurstMode = 'hold' | 'toggle';
-type InputMode = 'sendinput' | 'interception' | 'ddsimple' | 'dd_hid';
+type InputMode = 'sendinput' | 'interception' | 'ddsimple';
 type DriverStatus = 'installed' | 'pending_reboot' | 'not_installed';
 
 interface AppStatus {
@@ -201,9 +201,8 @@ const INPUT_MODE_LABELS: Record<InputMode, string> = {
   sendinput: '通用模式',
   interception: '游戏模式',
   ddsimple: 'DD驱动',
-  dd_hid: 'DDHID',
 };
-const INPUT_MODE_LIST: InputMode[] = ['sendinput', 'interception', 'ddsimple', 'dd_hid'];
+const INPUT_MODE_LIST: InputMode[] = ['sendinput', 'interception', 'ddsimple'];
 function isInputMode(value: string): value is InputMode {
   return (INPUT_MODE_LIST as string[]).includes(value);
 }
@@ -212,20 +211,10 @@ function inputModeRequiresAdmin(mode: InputMode): boolean {
   return mode !== 'sendinput';
 }
 
-// DD 系列驱动（DDSimple / DDHID）。横版键鼠图无法表达其单键规则约束，二者互斥。
+// DD 驱动（DDSimple）。横版键鼠图无法表达其单键规则约束，二者互斥。
 function isDdInputMode(mode: InputMode): boolean {
-  return mode === 'ddsimple' || mode === 'dd_hid';
+  return mode === 'ddsimple';
 }
-
-const DD_HID_BLOCKED_NOTICE = (
-  <>
-    经测试 DDHID 驱动不稳定，可能导致电脑蓝屏死机，已永久停用，不会再开放。
-    <br />
-    <br />
-    建议以管理员模式运行本应用、改用「游戏模式」；并在「诊断修复」中卸载 DDHID
-    驱动，避免造成不良影响。
-  </>
-);
 
 interface BurstRule {
   id: string;
@@ -480,29 +469,12 @@ export default function PanelApp() {
   const updateDownloadFailedRef = useRef(false);
   const initialLoadDone = useRef(false);
   const startupInputModeHandledRef = useRef(false);
-  const ddHidFallbackInFlightRef = useRef(false);
-  const ddHidNoticeOpenRef = useRef(false);
   const profileNameRef = useRef(profileName);
   // 供挂载期注册的事件监听调用最新的 switchToProfile（避免闭包锁死首帧版本）
   const switchToProfileRef = useRef<(path: string) => Promise<void>>(async () => {});
   // WebView2 聚焦时全局键盘钩子失效，将键盘事件中继到后端引擎（与浮窗共用）。
   useKeyRelay();
   const isDefaultProfile = profileName === DEFAULT_PROFILE_NAME;
-
-  const showDdHidBlockedNotice = useCallback(async () => {
-    if (ddHidNoticeOpenRef.current) return;
-    ddHidNoticeOpenRef.current = true;
-    try {
-      await confirm({
-        title: 'DDHID 已禁用',
-        description: DD_HID_BLOCKED_NOTICE,
-        confirmText: '知道了',
-        cancelText: null,
-      });
-    } finally {
-      ddHidNoticeOpenRef.current = false;
-    }
-  }, [confirm]);
 
   // 加载配置时被净化掉的项，取走一次就弹一次。启动加载先于窗口创建，事件会丢，
   // 故后端把结果存在 ProfileNotice 里等前端来取；运行期切换配置再靠事件触发这里重取。
@@ -538,53 +510,29 @@ export default function PanelApp() {
     };
   }, [showProfileNotice]);
 
-  const applyAppStatus = useCallback(
-    (status: AppStatus) => {
-      setElevated(status.elevated);
-      setInterceptionInstalled(status.interception_installed);
-      setDdHidInstalled(status.dd_hid_installed);
-      setSysInfo({
-        platform: status.platform,
-        os_family: status.os_family,
-        os_version: status.os_version,
-        webview_version: status.webview_version,
-        arch: status.arch,
-        locale: status.locale,
-        install_path: status.install_path,
-        log_dir: status.log_dir,
-        app_data_dir: status.app_data_dir,
-        autostart_enabled: status.autostart_enabled,
-        resources_ok: status.resources_ok,
-        missing_resources: status.missing_resources,
-        scheduler_hp_degraded: status.scheduler_hp_degraded,
-      });
-      if (isInputMode(status.input_mode)) {
-        if (status.input_mode === 'dd_hid') {
-          setInputMode('sendinput');
-          void showDdHidBlockedNotice();
-          if (!ddHidFallbackInFlightRef.current) {
-            ddHidFallbackInFlightRef.current = true;
-            invoke('set_input_mode', { mode: 'sendinput' })
-              .then(() => invoke<AppStatus>('get_app_status'))
-              .then((nextStatus) => {
-                if (nextStatus.input_mode !== 'dd_hid' && isInputMode(nextStatus.input_mode)) {
-                  setInputMode(nextStatus.input_mode);
-                }
-              })
-              .catch((e) => {
-                toast.warning(`已屏蔽DDHID，但回退通用模式失败：${e}`);
-              })
-              .finally(() => {
-                ddHidFallbackInFlightRef.current = false;
-              });
-          }
-          return;
-        }
-        setInputMode(status.input_mode);
-      }
-    },
-    [showDdHidBlockedNotice, toast],
-  );
+  const applyAppStatus = useCallback((status: AppStatus) => {
+    setElevated(status.elevated);
+    setInterceptionInstalled(status.interception_installed);
+    setDdHidInstalled(status.dd_hid_installed);
+    setSysInfo({
+      platform: status.platform,
+      os_family: status.os_family,
+      os_version: status.os_version,
+      webview_version: status.webview_version,
+      arch: status.arch,
+      locale: status.locale,
+      install_path: status.install_path,
+      log_dir: status.log_dir,
+      app_data_dir: status.app_data_dir,
+      autostart_enabled: status.autostart_enabled,
+      resources_ok: status.resources_ok,
+      missing_resources: status.missing_resources,
+      scheduler_hp_degraded: status.scheduler_hp_degraded,
+    });
+    if (isInputMode(status.input_mode)) {
+      setInputMode(status.input_mode);
+    }
+  }, []);
 
   async function reconcileStartupInputMode(status: AppStatus) {
     if (startupInputModeHandledRef.current) return;
@@ -594,18 +542,6 @@ export default function PanelApp() {
     if (configured === 'sendinput' || configured === status.input_mode) return;
 
     startupInputModeHandledRef.current = true;
-
-    if (configured === 'dd_hid') {
-      await showDdHidBlockedNotice();
-      try {
-        await invoke('set_input_mode', { mode: 'sendinput' });
-        const nextStatus = await invoke<AppStatus>('get_app_status');
-        applyAppStatus(nextStatus);
-      } catch (e) {
-        toast.warning(`已屏蔽DDHID，但回退通用模式失败：${e}`);
-      }
-      return;
-    }
 
     if (inputModeRequiresAdmin(configured) && !status.elevated) {
       const label = INPUT_MODE_LABELS[configured];
@@ -1306,12 +1242,7 @@ export default function PanelApp() {
   }
 
   async function selectInputMode(target: InputMode) {
-    if (target === 'dd_hid') {
-      setModePickerOpen(false);
-      await showDdHidBlockedNotice();
-      return;
-    }
-    // DD 系列与横版键鼠图互斥：横版下禁止切到 DD 驱动。
+    // DD 驱动与横版键鼠图互斥：横版下禁止切到 DD 驱动。
     if (isDdInputMode(target) && layout === 'horizontal') {
       setModePickerOpen(false);
       toast.warning('横版键鼠图不支持 DD 驱动模式，请先切回竖版规则列表');
@@ -1903,13 +1834,14 @@ export default function PanelApp() {
 
   async function handleUninstallDdHid() {
     const ok = await confirm({
-      title: '卸载DDHID 驱动',
+      title: '卸载 DDHID 驱动',
       description: (
         <>
-          将卸载DDHID 虚拟驱动。卸载后DDHID 模式将不可用，应用会切回通用模式。
+          DDHID 驱动不稳定、可能导致蓝屏，本应用已不再使用它。这里会清理你机器上残留的 DDHID
+          虚拟驱动。
           <br />
           <br />
-          卸载流程会调用 PnP 标准接口处理，建议卸载完成后重启电脑再尝试重新安装。
+          卸载流程会调用 PnP 标准接口处理，建议卸载完成后重启电脑。
         </>
       ),
       confirmText: '卸载',
@@ -2619,7 +2551,7 @@ export default function PanelApp() {
               title="点击选择输入模式"
             >
               {INPUT_MODE_LABELS[inputMode]}
-              {elevated && (inputMode === 'ddsimple' || inputMode === 'dd_hid') ? ' ★' : ''}
+              {elevated && inputMode === 'ddsimple' ? ' ★' : ''}
             </Button>
           </div>
           <div className="footer-control">

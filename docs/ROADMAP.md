@@ -9,7 +9,7 @@ Monorepo 结构，Rust workspace + pnpm workspace 双层管理。
 ## 当前阶段（2026-06-29）
 
 - 当前基线：`v0.3.0`。已发布 0.2.0–0.2.9；v0.3.0 为本次发布，主题为体验完善、稳定性与完整配置管理。
-- 已完成主能力：按压 / Toggle 连发、键盘全键位、鼠标 5 键、滚轮连发、Toggle 互斥分组（同组互斥切换）、规则拖拽排序与分组折叠/展开、竖版规则列表 + 横版键鼠图双布局、常驻置顶浮窗（显示激活规则 + 全局开关 + 展开主面板）、主题换肤（21 门派配色 + 亮 / 暗 / 跟随系统暗色模式）、多输入模式（主推游戏模式 Interception；通用 SendInput 与 DD驱动 DdSimple 备用；DDHID 已禁用；DD 系列与横版互斥）、多配置文件、全局热键（仅键盘、互不重复）、面板显隐热键、设置面板、声音反馈（每项独立开关）、诊断修复、外部配置导入、自动更新、系统托盘、开机自启。
+- 已完成主能力：按压 / Toggle 连发、键盘全键位、鼠标 5 键、滚轮连发、Toggle 互斥分组（同组互斥切换）、规则拖拽排序与分组折叠/展开、竖版规则列表 + 横版键鼠图双布局、常驻置顶浮窗（显示激活规则 + 全局开关 + 展开主面板）、主题换肤（21 门派配色 + 亮 / 暗 / 跟随系统暗色模式）、多输入模式（主推游戏模式 Interception；通用 SendInput 与 DD驱动 DdSimple 备用；DD驱动与横版互斥）、多配置文件、全局热键（仅键盘、互不重复）、面板显隐热键、设置面板、声音反馈（每项独立开关）、诊断修复、外部配置导入、自动更新、系统托盘、开机自启。
 - 连发速率：注入周期有效下限 `MIN_EFFECTIVE_INTERVAL_MS = 10ms`（结构下限仍为 1ms，旧配置 <10ms 在加载时自动钳到 10ms）；多规则同时连发时按「基础下限 × 活跃规则数」做总并发限速，使总注入速率与规则数无关，避免叠加超发导致停止「收不住」。
 - 配置 schema：`CURRENT_SCHEMA_VERSION = 4`。v1→v2 裸 VK 升级为 `KeyId`；v2→v3 增加滚轮上 / 下；v3→v4 `BurstRule` 新增可选 `group` 字段（Toggle 互斥分组）。
 - 用户协议：`v1.3`（补充 DD驱动模式、DDHID 暂停、驱动残留与卸载说明）。
@@ -183,7 +183,7 @@ v0.4 规划项，当前尚未创建 `pet.html` 与对应窗口。目标是透明
 │   │           │   └── mod.rs          # re-export burst-engine / win-input 公开 API
 │   │           └── commands/
 │   │               ├── app.rs          # 协议同意 / 检查更新 / 退出
-│   │               ├── ddhid_diagnostic.rs # DDHID 诊断报告（暂停模式残留排查）
+│   │               ├── ddhid_diagnostic.rs # DDHID 诊断报告（已移除模式的残留排查）
 │   │               ├── driver.rs       # 驱动安装卸载 + 提权重启
 │   │               ├── engine.rs       # 规则 CRUD + 输入模式切换
 │   │               ├── import_profile.rs
@@ -242,7 +242,7 @@ v0.4 规划项，当前尚未创建 `pet.html` 与对应窗口。目标是透明
     │       └── lib.rs                  # load_from_path / save_to_path
     │
     ├── win-sysinfo/                    # Windows 系统信息 + 注册表 + 安装前置检测
-    ├── win-input/                      # SendInput / Interception / DD驱动(DdSimple) / DDHID 输入注入
+    ├── win-input/                      # SendInput / Interception / DD驱动(DdSimple) 输入注入
     ├── burst-engine/                   # BurstEngine + LL keyboard/mouse hook
     ├── win-driver/                     # 驱动安装卸载 + ShellExecuteExW + PowerShell
     └── resource-integrity/             # 打包资源完整性校验
@@ -532,7 +532,7 @@ MVP 阶段用 CSS 动画 + SVG，后期视美术资源情况升级为 Sprite She
 | 键盘 / 鼠标 / 滚轮连发   | packages/burst-engine + packages/win-input      |
 | Toggle 互斥分组          | packages/qzh-profile（`BurstRule.group`）+ packages/burst-engine |
 | 规则拖拽排序 / 分组折叠  | 面板 UI（规则列表 + 分组容器）                  |
-| 多输入模式（通用 / 游戏 / DD驱动；DDHID 暂停） | packages/win-input + apps/main/src-tauri/commands/engine.rs |
+| 多输入模式（通用 / 游戏 / DD驱动） | packages/win-input + apps/main/src-tauri/commands/engine.rs |
 | 配置文件 CRUD            | apps/main — commands/profile.rs                 |
 | 外部配置导入             | apps/main — commands/import_profile.rs + ImportDialog |
 | `.qzh` 加密格式          | packages/qzh-format + packages/qzh-profile      |
@@ -672,7 +672,7 @@ payload：`version u8` / `issue_time u64`（防时钟回拨下界校验）/ `exp
 
 **连发引擎**
 
-- [x] `windows_sys` `WH_KEYBOARD_LL` / `WH_MOUSE_LL` 全局键鼠监听 + `SendInput` / Interception / DD-HID 三通道模拟
+- [x] `windows_sys` `WH_KEYBOARD_LL` / `WH_MOUSE_LL` 全局键鼠监听 + `SendInput` / Interception / DD驱动 三通道模拟
 - [x] `SIM_MARKER` + `PENDING_INJECTIONS` 过滤模拟事件循环，`pressed_keys` 过滤 OS key-repeat
 - [x] `catch_unwind` 包裹连发循环，panic 后记录日志并补发释放事件
 - [x] 按压连发状态机（持键发送，抬键停止）
@@ -754,7 +754,7 @@ payload：`version u8` / `issue_time u64`（防时钟回拨下界校验）/ `exp
 **连发引擎稳定性**
 
 - [x] 规则热更新：替换规则前停止连发线程并清空 toggle 状态
-- [x] 后端入参校验：规则数、间隔范围、DD-HID 特殊约束在命令层 / profile 层双重校验
+- [x] 后端入参校验：规则数、间隔范围、按键角色策略在命令层 / profile 层共用同一份判定
 - [x] 模拟事件过滤：SendInput 使用 `SIM_MARKER`，驱动通道使用 `PENDING_INJECTIONS`
 - [x] 多规则隔离：模拟目标键不会触发其他规则的启动 / 停止逻辑
 - [x] OS key-repeat 过滤：`pressed_keys: HashSet<KeyId>` 只响应物理首次按下

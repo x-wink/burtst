@@ -26,12 +26,6 @@ pub const EXPECTED_RESOURCES: &[ExpectedResource] = &[
         sha256: "E137863A79DA797F08E7A137280FF2A123809044A888FD75CE9C973198915ABE",
     },
     ExpectedResource {
-        rel: "ddhid.63340.dll",
-        label: "ddhid.63340.dll",
-        size: 2_242_088,
-        sha256: "01E8DB6893CF79E9E7AA3AFBEE76BEA6C4220C4D1A2C63BC2E5B7C109FDB831E",
-    },
-    ExpectedResource {
         rel: "dd63330.dll",
         label: "dd63330.dll",
         size: 3_860_008,

@@ -26,8 +26,8 @@ use commands::{
     },
     ddhid_diagnostic::export_dd_hid_diagnostic_report,
     driver::{
-        install_dd_hid_driver, install_driver, is_dd_hid_driver_installed, is_driver_installed,
-        is_elevated, relaunch_as_admin, uninstall_dd_hid_driver, uninstall_driver,
+        install_driver, is_dd_hid_driver_installed, is_driver_installed, is_elevated,
+        relaunch_as_admin, uninstall_dd_hid_driver, uninstall_driver,
     },
     engine::{
         get_active_rules, get_global_enabled, get_input_mode, get_key_policy, get_rules,
@@ -140,7 +140,6 @@ pub fn run() {
             install_driver,
             uninstall_driver,
             is_dd_hid_driver_installed,
-            install_dd_hid_driver,
             uninstall_dd_hid_driver,
             is_elevated,
             relaunch_as_admin,
