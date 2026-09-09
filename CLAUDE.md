@@ -173,8 +173,10 @@ DD 系列（DDSimple / DD-HID）驱动注入把 `ExtraInformation` 写死为 0�
    - `THIRD_PARTY.md` / `EULA.md`：若引入 / 变更第三方组件或权限说明则同步
 3. 运行 `pnpm bump-version X.X.X`，自动同步三处版本号并将 `[Unreleased]` 重命名为 `[X.X.X] - 日期`（脚本：`scripts/bump-version.ts`）
 4. 提交：`chore(release): bump version to X.X.X`
-5. 打 tag：`git tag vX.X.X && git push origin main && git push origin vX.X.X`
+5. **推 tag 前必须获得用户明确授权**（一次一授），随后 `git tag vX.X.X && git push origin main && git push origin vX.X.X`
 6. tag 推送后 CI 自动构建、提取 changelog、发布 Draft Release，审查后手动发布
+
+**发版授权**：本项目通过 Tauri updater 向真实用户推送更新，**不适用**全局约定中「演示项目免逐次授权」的项目级例外。第 1–4 步（写 changelog、更文档、bump 版本、提交）代理可自主完成；第 5 步推 tag 触发真发布必须停下等用户明确指令，上一次发版的授权不外推到下一次。
 
 **发版护栏**（Tauri updater 只升不降，坏版本无法「降级召回」，应急路径见 `docs/RELEASE_ROLLBACK.md`）：
 - **高风险版本禁止裸 bump `CURRENT_SCHEMA_VERSION`**：新增字段一律 `#[serde(default)]` 走向后兼容，仅字段重命名/移动/删除/类型变更才允许递增 schema 版本。原因：若带着 schema bump 的版本出问题需「向前滚修复」，用户配置已被写成新 schema，回到旧逻辑会 `TooNew` 拒载、砸用户配置。
@@ -192,8 +194,4 @@ type：`feat` | `fix` | `docs` | `style` | `refactor` | `test` | `chore` | `ci` 
 
 **覆盖率门槛**：`packages/{qzh-format, qzh-profile, crypto, migrate}` 整体行覆盖 ≥ 85%、函数 ≥ 80%、region ≥ 85%。CI 由 `.github/workflows/coverage.yml` 强制（PR 与 push:main 触发）；新增共享 crate 须同步加入 workflow 与 `package.json` 的 `coverage` 脚本的 `--package` 列表。`apps/main/src-tauri` 与 `win-*` / `burst-engine` 因含大量 `#[cfg(windows)]` 代码，不在阈值监控范围。
 
-- 全程使用中文。
-
-- 提交信息不添加 `Co-Authored-By` 署名行。
-
-- 不主动commit，除非用户明确要求。
+**通用协作约定**：语言、提交与推送策略、文档与注释风格、危险动作授权等跨项目规则以全局 `~/.claude/CLAUDE.md` 为单一事实来源，本文件不重复，只记录 flair-bloom 特有的约束。
