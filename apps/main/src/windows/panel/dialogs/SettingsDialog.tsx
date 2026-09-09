@@ -15,6 +15,12 @@ export type SettingsTab = 'general' | 'hotkeys' | 'sound' | 'profiles';
 type SettingsInputMode = 'sendinput' | 'interception' | 'ddsimple' | 'dd_hid';
 type DriverStatus = 'installed' | 'pending_reboot' | 'not_installed';
 
+/** 四个播报时机，也是 `${slot}Text` / `${slot}Source` 等字段的前缀。 */
+export type SoundSlot = 'start' | 'end' | 'toggleStart' | 'toggleEnd';
+
+/** 每个时机各自选择用 TTS 朗读文本，还是播放用户自选的音频文件。 */
+export type SoundSource = 'tts' | 'audio';
+
 export interface SoundSettings {
   enabled: boolean;
   // 每个播报时机独立开关，默认开；总开关 enabled 关闭时整体静音
@@ -29,6 +35,16 @@ export interface SoundSettings {
   endText: string;
   toggleStartText: string;
   toggleEndText: string;
+  // 音源与音频文件名逐时机独立：常见诉求是全局开关配音效、Toggle 仍朗读键名
+  startSource: SoundSource;
+  endSource: SoundSource;
+  toggleStartSource: SoundSource;
+  toggleEndSource: SoundSource;
+  // 存 {app_data_dir}/sounds/ 下的文件名而非源路径，空串表示尚未选择
+  startAudio: string;
+  endAudio: string;
+  toggleStartAudio: string;
+  toggleEndAudio: string;
   voiceName: string;
   globalOnly: boolean; // reserved, not yet wired
 }
@@ -70,7 +86,8 @@ interface Props {
   }) => void;
   onToggleAutostart: () => void;
   onSoundChange: (patch: Partial<SoundSettings>) => void;
-  onPreviewSound: (type: 'start' | 'end' | 'toggleStart' | 'toggleEnd') => void;
+  onPreviewSound: (slot: SoundSlot) => void;
+  onPickSoundAudio: (slot: SoundSlot) => void;
   theme: ThemeSettings;
   onThemeChange: (patch: Partial<ThemeSettings>) => void;
   onCreateProfile: () => void;
@@ -95,6 +112,11 @@ const THEME_MODE_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: '亮' },
   { value: 'dark', label: '暗' },
   { value: 'system', label: '跟随系统' },
+];
+
+const SOUND_SOURCE_OPTIONS: { value: SoundSource; label: string }[] = [
+  { value: 'tts', label: '朗读' },
+  { value: 'audio', label: '音频' },
 ];
 
 const INPUT_MODE_LABELS: Record<SettingsInputMode, string> = {
@@ -195,35 +217,76 @@ function SliderRow({
   );
 }
 
-// 单条播报语句行：文本框（含内嵌试听图标）+ 行尾独立开关。
-// 文本编辑与试听仅受总开关 masterEnabled 限制；行尾开关仅控制实际播报，不锁定编辑。
+// 单条播报行，两行结构：标题 + 音源分段（朗读 / 音频）+ 行尾开关，下面一整行随音源
+// 切换为文本框或音频选择按钮（右端内嵌试听）。
+// 编辑与试听仅受总开关 masterEnabled 限制；行尾开关仅控制实际播报，不锁定编辑。
 function SoundStatementRow({
   title,
-  desc,
   value,
+  source,
+  audioName,
   enabled,
   masterEnabled,
   onTextChange,
+  onSourceChange,
+  onPickAudio,
   onToggle,
   onPreview,
 }: {
   title: string;
-  desc: ReactNode;
   value: string;
+  source: SoundSource;
+  audioName: string;
   enabled: boolean;
   masterEnabled: boolean;
   onTextChange: (v: string) => void;
+  onSourceChange: (s: SoundSource) => void;
+  onPickAudio: () => void;
   onToggle: (on: boolean) => void;
   onPreview: () => void;
 }) {
+  const isAudio = source === 'audio';
   return (
-    <div className="settings-row">
-      <div className="settings-row-main">
+    <div className="settings-row settings-row--stack settings-sound-row">
+      <div className="settings-sound-head">
         <span className="settings-row-title">{title}</span>
-        <span className="settings-row-desc">{desc}</span>
+        <div className="settings-sound-head-actions">
+          <div className="settings-source-seg" role="group" aria-label={`${title}音源`}>
+            {SOUND_SOURCE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`settings-source-seg-btn${source === opt.value ? ' settings-source-seg-btn--active' : ''}`}
+                disabled={!masterEnabled}
+                aria-pressed={source === opt.value}
+                onClick={() => onSourceChange(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <input
+            type="checkbox"
+            className="enable-checkbox"
+            checked={enabled}
+            disabled={!masterEnabled}
+            onChange={(e) => onToggle(e.target.checked)}
+            aria-label={`${title}提示开关`}
+          />
+        </div>
       </div>
-      <div className="settings-text-group">
-        <div className="settings-input-wrap">
+      <div className="settings-input-wrap">
+        {isAudio ? (
+          <button
+            type="button"
+            className={`settings-audio-pick${audioName ? '' : ' settings-audio-pick--empty'}`}
+            disabled={!masterEnabled}
+            onClick={onPickAudio}
+            title={audioName || '选择音频文件'}
+          >
+            {audioName || '选择音频文件…'}
+          </button>
+        ) : (
           <input
             type="text"
             className="settings-text-input"
@@ -232,25 +295,17 @@ function SoundStatementRow({
             disabled={!masterEnabled}
             onChange={(e) => onTextChange(e.target.value)}
           />
-          <button
-            type="button"
-            className="settings-input-icon-btn"
-            disabled={!masterEnabled}
-            onClick={onPreview}
-            aria-label="试听"
-            title="试听"
-          >
-            <VolumeIcon />
-          </button>
-        </div>
-        <input
-          type="checkbox"
-          className="enable-checkbox"
-          checked={enabled}
-          disabled={!masterEnabled}
-          onChange={(e) => onToggle(e.target.checked)}
-          aria-label={`${title}提示开关`}
-        />
+        )}
+        <button
+          type="button"
+          className="settings-input-icon-btn"
+          disabled={!masterEnabled || (isAudio && !audioName)}
+          onClick={onPreview}
+          aria-label="试听"
+          title="试听"
+        >
+          <VolumeIcon />
+        </button>
       </div>
     </div>
   );
@@ -499,7 +554,7 @@ export default function SettingsDialog(props: Props) {
                 <div className="settings-row-main">
                   <span className="settings-row-title">声音反馈</span>
                   <span className="settings-row-desc">
-                    {sound.enabled ? '切换全局开关时朗读语句' : '已关闭'}
+                    {sound.enabled ? '连发状态变化时朗读语句或播放音频' : '已关闭'}
                   </span>
                 </div>
                 <input
@@ -512,51 +567,70 @@ export default function SettingsDialog(props: Props) {
               </div>
             </SettingsSection>
 
-            <SettingsSection title="语句">
+            <SettingsSection title="提示">
               <div
                 className={`settings-sound-body${sound.enabled ? '' : ' settings-sound-body--disabled'}`}
               >
                 <SoundStatementRow
                   title="全局启用"
-                  desc="全局开关启用时朗读"
                   value={sound.startText}
+                  source={sound.startSource}
+                  audioName={sound.startAudio}
                   enabled={sound.startEnabled}
                   masterEnabled={sound.enabled}
                   onTextChange={(v) => props.onSoundChange({ startText: v })}
+                  onSourceChange={(s) => props.onSoundChange({ startSource: s })}
+                  onPickAudio={() => props.onPickSoundAudio('start')}
                   onToggle={(on) => props.onSoundChange({ startEnabled: on })}
                   onPreview={() => props.onPreviewSound('start')}
                 />
                 <SoundStatementRow
                   title="全局停用"
-                  desc="全局开关停用时朗读"
                   value={sound.endText}
+                  source={sound.endSource}
+                  audioName={sound.endAudio}
                   enabled={sound.endEnabled}
                   masterEnabled={sound.enabled}
                   onTextChange={(v) => props.onSoundChange({ endText: v })}
+                  onSourceChange={(s) => props.onSoundChange({ endSource: s })}
+                  onPickAudio={() => props.onPickSoundAudio('end')}
                   onToggle={(on) => props.onSoundChange({ endEnabled: on })}
                   onPreview={() => props.onPreviewSound('end')}
                 />
                 <SoundStatementRow
                   title="Toggle 开始"
-                  desc={<>启动时朗读，{'${key}'} 替换为目标键名</>}
                   value={sound.toggleStartText}
+                  source={sound.toggleStartSource}
+                  audioName={sound.toggleStartAudio}
                   enabled={sound.toggleStartEnabled}
                   masterEnabled={sound.enabled}
                   onTextChange={(v) => props.onSoundChange({ toggleStartText: v })}
+                  onSourceChange={(s) => props.onSoundChange({ toggleStartSource: s })}
+                  onPickAudio={() => props.onPickSoundAudio('toggleStart')}
                   onToggle={(on) => props.onSoundChange({ toggleStartEnabled: on })}
                   onPreview={() => props.onPreviewSound('toggleStart')}
                 />
                 <SoundStatementRow
                   title="Toggle 结束"
-                  desc={<>停止时朗读，{'${key}'} 替换为目标键名</>}
                   value={sound.toggleEndText}
+                  source={sound.toggleEndSource}
+                  audioName={sound.toggleEndAudio}
                   enabled={sound.toggleEndEnabled}
                   masterEnabled={sound.enabled}
                   onTextChange={(v) => props.onSoundChange({ toggleEndText: v })}
+                  onSourceChange={(s) => props.onSoundChange({ toggleEndSource: s })}
+                  onPickAudio={() => props.onPickSoundAudio('toggleEnd')}
                   onToggle={(on) => props.onSoundChange({ toggleEndEnabled: on })}
                   onPreview={() => props.onPreviewSound('toggleEnd')}
                 />
               </div>
+              <p className="settings-note">
+                Toggle 两条语句里的 {'${key}'} 会替换为规则的目标键名。
+              </p>
+              <p className="settings-note">
+                选「音频」后文件会复制进应用数据目录，之后移动或删除源文件不影响播放。支持 mp3 / wav
+                / ogg / m4a / flac，单个不超过 5 MB。
+              </p>
             </SettingsSection>
 
             <SettingsSection title="合成参数">
@@ -613,6 +687,9 @@ export default function SettingsDialog(props: Props) {
                   formatValue={(v) => `${v}%`}
                 />
               </div>
+              <p className="settings-note">
+                语音、语速、音调只作用于朗读；音量对朗读与音频都生效。
+              </p>
             </SettingsSection>
           </>
         )}

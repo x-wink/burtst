@@ -7,4 +7,5 @@ pub mod log;
 pub mod profile;
 pub mod repair;
 pub mod resource_integrity;
+pub mod sound;
 pub mod status;

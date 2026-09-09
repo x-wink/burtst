@@ -29,7 +29,12 @@ import AboutDialog, { type AboutDialogInfo } from './dialogs/AboutDialog';
 import AgreementDialog from './dialogs/AgreementDialog';
 import ImportDialog from './dialogs/ImportDialog';
 import RepairDialog from './dialogs/RepairDialog';
-import SettingsDialog, { type SettingsTab, type SoundSettings } from './dialogs/SettingsDialog';
+import SettingsDialog, {
+  type SettingsTab,
+  type SoundSettings,
+  type SoundSlot,
+  type SoundSource,
+} from './dialogs/SettingsDialog';
 import {
   applyThemeColor,
   applyThemeMode,
@@ -72,9 +77,61 @@ const DEFAULT_SOUND: SoundSettings = {
   endText: '我累了歇会',
   toggleStartText: '${key}开始',
   toggleEndText: '停止${key}',
+  startSource: 'tts',
+  endSource: 'tts',
+  toggleStartSource: 'tts',
+  toggleEndSource: 'tts',
+  startAudio: '',
+  endAudio: '',
+  toggleStartAudio: '',
+  toggleEndAudio: '',
   voiceName: '',
   globalOnly: false,
 };
+
+// 四个播报时机的字段平铺在 SoundSettings 上，集中在此表里读写，
+// 免得各处手拼 `${slot}Audio` 这类字段名而丢掉类型检查。
+const SOUND_SLOTS: Record<
+  SoundSlot,
+  {
+    read: (s: SoundSettings) => { source: SoundSource; audio: string; text: string };
+    pickAudio: (name: string) => Partial<SoundSettings>;
+  }
+> = {
+  start: {
+    read: (s) => ({ source: s.startSource, audio: s.startAudio, text: s.startText }),
+    pickAudio: (name) => ({ startAudio: name, startSource: 'audio' }),
+  },
+  end: {
+    read: (s) => ({ source: s.endSource, audio: s.endAudio, text: s.endText }),
+    pickAudio: (name) => ({ endAudio: name, endSource: 'audio' }),
+  },
+  toggleStart: {
+    read: (s) => ({
+      source: s.toggleStartSource,
+      audio: s.toggleStartAudio,
+      text: s.toggleStartText,
+    }),
+    pickAudio: (name) => ({ toggleStartAudio: name, toggleStartSource: 'audio' }),
+  },
+  toggleEnd: {
+    read: (s) => ({ source: s.toggleEndSource, audio: s.toggleEndAudio, text: s.toggleEndText }),
+    pickAudio: (name) => ({ toggleEndAudio: name, toggleEndSource: 'audio' }),
+  },
+};
+
+const SOUND_FILE_EXTENSIONS = [
+  'mp3',
+  'wav',
+  'ogg',
+  'oga',
+  'opus',
+  'm4a',
+  'aac',
+  'flac',
+  'weba',
+  'webm',
+];
 const DEFAULT_PROFILE_NAME = 'defaults';
 // 注入周期基础下限 10ms（≈100 taps/s）：管线每事件过路税决定可持续「总」注入速率。单规则用
 // 此值；多条规则同时连发时后端按活跃规则数等分总速率（见 burst-engine process_due），避免叠加
@@ -314,6 +371,9 @@ export default function PanelApp() {
   const [togglingAutostart, setTogglingAutostart] = useState(false);
   const [sound, setSound] = useState<SoundSettings>(DEFAULT_SOUND);
   const soundRef = useRef<SoundSettings>(DEFAULT_SOUND);
+  const audioUrlCache = useRef(new Map<string, string>());
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const playbackSeq = useRef(0);
   const [theme, setTheme] = useState<ThemeSettings>(DEFAULT_THEME);
   const themeModeRef = useRef<ThemeMode>(DEFAULT_THEME.mode);
   const [availableVoices, setAvailableVoices] = useState<string[]>([]);
@@ -564,6 +624,15 @@ export default function PanelApp() {
     };
     return () => {
       speechSynthesis.onvoiceschanged = previousVoicesChanged;
+    };
+  }, []);
+
+  // 卸载时释放自选音频的 Blob URL，避免窗口重建后旧对象常驻内存
+  useEffect(() => {
+    const cache = audioUrlCache.current;
+    return () => {
+      for (const url of cache.values()) URL.revokeObjectURL(url);
+      cache.clear();
     };
   }, []);
 
@@ -848,12 +917,12 @@ export default function PanelApp() {
   // 全局开关切换时播报语音；initialLoadDone 为 true 后才响应，跳过启动阶段的状态同步
   useEffect(() => {
     if (!initialLoadDone.current) return;
-    speakGlobalChange(globalEnabled);
+    playGlobalChange(globalEnabled);
   }, [globalEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Toggle 规则启动/停止时播报语音，通过 activeRuleIds 变化检测状态翻转。
   // 依赖 rules state 而非 ref，避免 queueMicrotask(initialLoadDone) 比 React re-render
-  // 先触发时 rulesRef 为空导致 find 失败、speakToggle 永远不调用的竞态。
+  // 先触发时 rulesRef 为空导致 find 失败、playToggleFeedback 永远不调用的竞态。
   useEffect(() => {
     if (!initialLoadDone.current) return;
     if (!globalEnabled) {
@@ -879,13 +948,13 @@ export default function PanelApp() {
         const rule = rules.find((r) => r.id === id);
         if (rule?.mode !== 'toggle') continue;
         const displaced = rule.group != null && startedRules.some((r) => r.group === rule.group);
-        if (!displaced) speakToggle(rule, false);
+        if (!displaced) playToggleFeedback(rule, false);
       }
     }
 
-    // 启动播报放最后，保证是 speakLatest 最终出声的那条
+    // 启动播报放最后，保证是 playFeedback 最终出声的那条
     for (const rule of startedRules) {
-      speakToggle(rule, true);
+      playToggleFeedback(rule, true);
     }
   }, [activeRuleIds, globalEnabled, rules]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -902,39 +971,115 @@ export default function PanelApp() {
     return utt;
   }
 
-  function speakLatest(text: string, s: SoundSettings) {
+  function speakText(text: string, s: SoundSettings) {
     if (!('speechSynthesis' in window)) return;
-    const synth = window.speechSynthesis;
-    synth.cancel();
     if (text.trim().length === 0) return;
+    const synth = window.speechSynthesis;
     synth.speak(buildUtterance(text, s));
     if (synth.paused) synth.resume();
   }
 
-  function speakGlobalChange(enabled: boolean) {
+  // 自选音频的字节经 IPC 取回后转成 Blob URL 缓存，避免每次提示都重读一遍文件。
+  function soundUrl(name: string): Promise<string> {
+    const cached = audioUrlCache.current.get(name);
+    if (cached) return Promise.resolve(cached);
+    return invoke<ArrayBuffer>('read_sound_file', { name }).then((bytes) => {
+      const url = URL.createObjectURL(new Blob([bytes]));
+      audioUrlCache.current.set(name, url);
+      return url;
+    });
+  }
+
+  function playAudioFile(name: string, volume: number) {
+    // 取字节是异步的，期间可能已经有新提示插队，用序号只放行最后一次请求
+    const seq = playbackSeq.current;
+    soundUrl(name)
+      .then((url) => {
+        if (seq !== playbackSeq.current) return;
+        let el = audioElRef.current;
+        if (!el) {
+          el = new Audio();
+          audioElRef.current = el;
+        }
+        if (el.src !== url) el.src = url;
+        el.volume = Math.min(1, Math.max(0, volume / 100));
+        el.currentTime = 0;
+        void el.play().catch(() => {});
+      })
+      .catch(() => {
+        toast.error(`提示音「${name}」播放失败`);
+      });
+  }
+
+  // 朗读与音频共用「最新覆盖」语义：新提示先掐断上一条，避免连续切换时叠音。
+  function stopFeedback() {
+    playbackSeq.current += 1;
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    audioElRef.current?.pause();
+  }
+
+  // text 为已展开 ${key} 的成品；音源选了音频却没选文件时静默跳过。
+  function playFeedback(slot: SoundSlot, text: string, s: SoundSettings) {
+    const { source, audio } = SOUND_SLOTS[slot].read(s);
+    stopFeedback();
+    if (source === 'audio') {
+      if (audio) playAudioFile(audio, s.volume);
+      return;
+    }
+    speakText(text, s);
+  }
+
+  function playGlobalChange(enabled: boolean) {
     const s = soundRef.current;
     if (!s.enabled) return;
     if (enabled ? !s.startEnabled : !s.endEnabled) return;
-    speakLatest(enabled ? s.startText : s.endText, s);
+    playFeedback(enabled ? 'start' : 'end', enabled ? s.startText : s.endText, s);
   }
 
-  function speakToggle(rule: BurstRule, isStart: boolean) {
+  function playToggleFeedback(rule: BurstRule, isStart: boolean) {
     const s = soundRef.current;
     if (!s.enabled) return;
     if (isStart ? !s.toggleStartEnabled : !s.toggleEndEnabled) return;
+    const slot: SoundSlot = isStart ? 'toggleStart' : 'toggleEnd';
     const template = (isStart ? s.toggleStartText : s.toggleEndText) ?? '';
-    const text = template.split('${key}').join(keyLabel(rule.target_key));
-    speakLatest(text, s);
+    playFeedback(slot, template.split('${key}').join(keyLabel(rule.target_key)), s);
   }
 
-  function previewSound(type: 'start' | 'end' | 'toggleStart' | 'toggleEnd') {
+  function previewSound(slot: SoundSlot) {
     const s = soundRef.current;
-    let text: string;
-    if (type === 'start') text = s.startText;
-    else if (type === 'end') text = s.endText;
-    else if (type === 'toggleStart') text = s.toggleStartText.replace('${key}', 'F');
-    else text = s.toggleEndText.replace('${key}', 'F');
-    speakLatest(text, s);
+    const { text } = SOUND_SLOTS[slot].read(s);
+    playFeedback(slot, text.split('${key}').join('F'), s);
+  }
+
+  // 选中的音频复制进应用数据目录后只留文件名；被换下的旧文件若已无人引用就删掉，
+  // 否则反复更换会在 sounds/ 里堆垃圾。
+  async function pickSoundAudio(slot: SoundSlot) {
+    const path = await openFileDialog({
+      multiple: false,
+      filters: [{ name: '音频文件', extensions: SOUND_FILE_EXTENSIONS }],
+    });
+    if (!path) return;
+    const previous = SOUND_SLOTS[slot].read(soundRef.current).audio;
+    try {
+      const name = await invoke<string>('import_sound_file', { path });
+      persistSound(SOUND_SLOTS[slot].pickAudio(name));
+      releaseAudio(previous);
+    } catch (e) {
+      toast.error(`选择音频失败：${e}`);
+    }
+  }
+
+  function releaseAudio(name: string) {
+    if (!name) return;
+    const s = soundRef.current;
+    const stillUsed = [s.startAudio, s.endAudio, s.toggleStartAudio, s.toggleEndAudio];
+    if (stillUsed.includes(name)) return;
+    const url = audioUrlCache.current.get(name);
+    if (url) {
+      URL.revokeObjectURL(url);
+      audioUrlCache.current.delete(name);
+    }
+    invoke('delete_sound_file', { name }).catch(() => {});
   }
 
   function persistSound(patch: Partial<SoundSettings>) {
@@ -2531,6 +2676,7 @@ export default function PanelApp() {
           onToggleAutostart={() => void handleToggleAutostart()}
           onSoundChange={persistSound}
           onPreviewSound={previewSound}
+          onPickSoundAudio={pickSoundAudio}
           theme={theme}
           onThemeChange={persistTheme}
           onCreateProfile={() => {

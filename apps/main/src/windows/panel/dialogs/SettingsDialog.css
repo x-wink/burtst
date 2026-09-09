@@ -299,21 +299,69 @@
   pointer-events: none;
 }
 
-.settings-text-group {
+/* 播报行：首行标题 + 音源分段 + 开关，次行是随音源切换的整宽输入区 */
+.settings-row.settings-sound-row {
+  gap: var(--fb-space-4);
+}
+
+.settings-sound-head {
   display: flex;
   align-items: center;
-  gap: var(--fb-space-3);
+  justify-content: space-between;
+  gap: var(--fb-space-4);
+}
+
+.settings-sound-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--fb-space-5);
   flex: none;
+}
+
+/* 音源分段（朗读 / 音频）：与外观页的 theme-mode-seg 同款，仅更紧凑 */
+.settings-source-seg {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--fb-border-soft);
+  border-radius: var(--fb-radius-md);
+  overflow: hidden;
+}
+
+.settings-source-seg-btn {
+  padding: var(--fb-space-2) var(--fb-space-4);
+  border: none;
+  background: var(--fb-surface);
+  color: var(--fb-text-regular);
+  font: inherit;
+  font-size: var(--fb-fs-xs);
+  cursor: pointer;
+  transition:
+    background var(--fb-duration-base) ease,
+    color var(--fb-duration-base) ease;
+}
+
+.settings-source-seg-btn + .settings-source-seg-btn {
+  border-left: 1px solid var(--fb-border-soft);
+}
+
+.settings-source-seg-btn--active {
+  background: var(--fb-color-primary);
+  color: var(--fb-text-on-accent);
+}
+
+.settings-source-seg-btn:disabled {
+  cursor: not-allowed;
 }
 
 .settings-input-wrap {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  width: 100%;
 }
 
 .settings-text-input {
-  width: 180px;
+  width: 100%;
   padding: var(--fb-space-2) var(--fb-space-4);
   border: 1px solid var(--fb-border-soft);
   border-radius: var(--fb-radius-md);
@@ -328,8 +376,42 @@
 }
 
 /* 试听图标内嵌在文本框右侧 */
-.settings-input-wrap .settings-text-input {
+.settings-input-wrap .settings-text-input,
+.settings-input-wrap .settings-audio-pick {
   padding-right: 30px;
+}
+
+/* 与 settings-text-input 同尺寸同边框，让两种音源切换时行高与对齐不跳动 */
+.settings-audio-pick {
+  width: 100%;
+  padding: var(--fb-space-2) var(--fb-space-4);
+  border: 1px solid var(--fb-border-soft);
+  border-radius: var(--fb-radius-md);
+  background: var(--fb-surface-soft);
+  color: var(--fb-text-strong);
+  font: inherit;
+  font-size: var(--fb-fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--fb-duration-base) ease;
+}
+
+.settings-audio-pick:hover:not(:disabled),
+.settings-audio-pick:focus {
+  border-color: var(--fb-color-primary);
+}
+
+.settings-audio-pick--empty {
+  color: var(--fb-text-faint);
+}
+
+.settings-audio-pick:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-input-icon-btn {

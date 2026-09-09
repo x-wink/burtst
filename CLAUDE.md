@@ -52,6 +52,7 @@ apps/main/src-tauri/src/        # Tauri 后端（Rust）
     engine.rs                   # 规则 CRUD + 输入模式切换（~150 行）
     log.rs / profile.rs         # 日志 / 配置文件 CRUD
     repair.rs                   # diagnose_environment + 4 个 repair_* 命令
+    sound.rs                    # 自选提示音导入 / 读取 / 删除（复制进 app_data_dir/sounds）
     status.rs                   # get_app_status + emit_status_changed
   engine/
     mod.rs                      # 仅 re-export burst_engine / win_input 公开 API
@@ -134,7 +135,7 @@ DD 系列（DDSimple / DD-HID）驱动注入把 `ExtraInformation` 写死为 0�
 
 **AppHandle 不进 packages**：`win-driver` / `win-input` / `win-sysinfo` / `burst-engine` 所有函数均不接受 `AppHandle` 参数。资源目录由 `commands/driver.rs` 从 `app.path().resource_dir()` 取得后传入，Tauri 状态管理留在 commands 层。
 
-**数据存储路径**：`{app_data_dir}/profiles/`（.qzh）、`{app_data_dir}/settings.json`（plugin-store）、`{app_local_data_dir}/pending_update/`（下载待安装更新包）、`{app_log_dir}/`（rolling logs）。由 Tauri `PathResolver` 跨平台解析。
+**数据存储路径**：`{app_data_dir}/profiles/`（.qzh）、`{app_data_dir}/sounds/`（自选提示音，导入时复制进来，settings.json 只存文件名）、`{app_data_dir}/settings.json`（plugin-store）、`{app_local_data_dir}/pending_update/`（下载待安装更新包）、`{app_log_dir}/`（rolling logs）。由 Tauri `PathResolver` 跨平台解析。
 
 ## 输入约束
 

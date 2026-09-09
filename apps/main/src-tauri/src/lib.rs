@@ -44,6 +44,7 @@ use commands::{
         diagnose_environment, repair_clean_logs, repair_corrupted_profiles, repair_dd_hid_residue,
         repair_interception_residue,
     },
+    sound::{delete_sound_file, import_sound_file, read_sound_file},
     status::get_app_status,
 };
 use engine::{start_listener, BurstEngine};
@@ -168,6 +169,9 @@ pub fn run() {
             scan_import_configs,
             preview_import,
             import_external_config,
+            import_sound_file,
+            read_sound_file,
+            delete_sound_file,
         ])
         .setup(move |app| {
             // 全局热键回调：同步托盘菜单与前端开关状态
