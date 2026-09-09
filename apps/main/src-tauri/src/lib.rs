@@ -30,15 +30,16 @@ use commands::{
         is_elevated, relaunch_as_admin, uninstall_dd_hid_driver, uninstall_driver,
     },
     engine::{
-        get_active_rules, get_global_enabled, get_input_mode, get_rules, relay_key_event,
-        set_global_enabled, set_global_hotkeys, set_input_mode, set_rules, EngineState,
+        get_active_rules, get_global_enabled, get_input_mode, get_key_policy, get_rules,
+        relay_key_event, set_global_enabled, set_global_hotkeys, set_input_mode, set_rules,
+        EngineState,
     },
     import_profile::{import_external_config, preview_import, scan_import_configs},
     log::{log_from_frontend, open_app_dir},
     profile::{
         delete_profile, export_profile, fork_active_profile, get_active_profile_path,
         import_qzh_profile, init_default_profile, list_profiles, load_profile, rename_profile,
-        save_profile,
+        save_profile, take_profile_notice, ProfileNotice,
     },
     repair::{
         diagnose_environment, repair_clean_logs, repair_corrupted_profiles, repair_dd_hid_residue,
@@ -121,6 +122,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(EngineState(burst_engine.clone()))
+        .manage(ProfileNotice::default())
         .manage(UpdateLock(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![
             set_global_enabled,
@@ -130,6 +132,8 @@ pub fn run() {
             get_rules,
             get_active_rules,
             relay_key_event,
+            get_key_policy,
+            take_profile_notice,
             get_input_mode,
             set_input_mode,
             is_driver_installed,

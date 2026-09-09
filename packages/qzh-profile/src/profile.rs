@@ -134,12 +134,6 @@ pub enum ProfileError {
     /// 连发间隔不在允许范围内。
     #[error("rule interval {0}ms is out of range")]
     InvalidInterval(u32),
-    /// DD-HID 模式下 Toggle 规则的 `target_key == trigger_key`，会导致自循环。
-    #[error("rule {0}: target_key must differ from trigger_key in DD mode")]
-    DdTargetEqualsTrigger(String),
-    /// DD-HID 模式下 Toggle 规则的 `target_key == stop_key`，会导致按下停止键即又触发。
-    #[error("rule {0}: target_key must differ from stop_key in DD mode")]
-    DdTargetEqualsStop(String),
     /// 解析或序列化 JSON 时出错。
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -172,17 +166,13 @@ impl Profile {
         }
     }
 
-    /// 通用校验：仅检查规则数与连发间隔范围，不做后端模式相关约束。
+    /// 文件结构完整性校验：规则数与连发间隔范围。**不检查按键策略**。
+    ///
+    /// 按键是否被所在槽位接受由 [`crate::key_policy`] 判定，且刻意不放在这里：加载一份
+    /// 含不支持按键的旧配置时要能净化后照常打开，而不是整个文件打不开。策略的强制点在
+    /// 命令层（保存规则、切换输入模式、设置热键），加载期则走
+    /// [`crate::key_policy::sanitize_profile`]。
     pub fn validate(&self) -> Result<(), ProfileError> {
-        self.validate_for_mode(false)
-    }
-
-    /// `distinct_target = true` 时启用 DD-HID 模式专属约束：
-    /// DD 后端无法在 dwExtraInfo 中写入过滤标记，Toggle 模式的 sim KEYDOWN 会被 hook
-    /// 处理，无法过滤自身，故要求：
-    /// - `target_key != trigger_key`
-    /// - `target_key != stop_key`（默认 `stop_key = trigger_key`）
-    pub fn validate_for_mode(&self, distinct_target: bool) -> Result<(), ProfileError> {
         if self.rules.len() > MAX_RULES {
             return Err(ProfileError::TooManyRules);
         }
@@ -190,18 +180,6 @@ impl Profile {
             let i = rule.interval_ms;
             if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&i) {
                 return Err(ProfileError::InvalidInterval(i));
-            }
-            if !distinct_target || !rule.enabled {
-                continue;
-            }
-            if rule.mode == BurstMode::Toggle {
-                if rule.target_key == rule.trigger_key {
-                    return Err(ProfileError::DdTargetEqualsTrigger(rule.id.clone()));
-                }
-                let stop = rule.stop_key.unwrap_or(rule.trigger_key);
-                if rule.target_key == stop {
-                    return Err(ProfileError::DdTargetEqualsStop(rule.id.clone()));
-                }
             }
         }
         Ok(())

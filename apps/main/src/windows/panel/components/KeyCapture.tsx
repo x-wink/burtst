@@ -108,6 +108,14 @@ const KEY_NAMES: Record<number, string> = {
   0xde: "'",
   0x14: 'CapsLock',
   0x5d: '菜单键',
+  0xa0: '左 Shift',
+  0xa1: '右 Shift',
+  0xa2: '左 Ctrl',
+  0xa3: '右 Ctrl',
+  0xa4: '左 Alt',
+  0xa5: '右 Alt',
+  0x5b: '左 Win',
+  0x5c: '右 Win',
   0x90: 'NumLock',
   0x91: 'ScrollLock',
   0x13: 'Pause',
@@ -238,6 +246,54 @@ export const BROWSER_VK: Record<string, number> = {
   ArrowRight: 0x27,
 } as const;
 
+/**
+ * 修饰键的左右独立 VK。与 [`BROWSER_VK`] 分开维护：修饰键只允许绑定全局热键，
+ * 不允许做连发规则的触发键 / 目标键——连发 Alt / Win 会持续触发系统菜单语义，
+ * 且 `WM_SYSKEY*` 通道下的注入行为在各游戏里不一致。
+ */
+export const MODIFIER_VK: Record<string, number> = {
+  ShiftLeft: 0xa0,
+  ShiftRight: 0xa1,
+  ControlLeft: 0xa2,
+  ControlRight: 0xa3,
+  AltLeft: 0xa4,
+  AltRight: 0xa5,
+  MetaLeft: 0x5b,
+  MetaRight: 0x5c,
+} as const;
+
+/**
+ * 一个录入槽位的允许集，由后端 `get_key_policy` 下发。
+ *
+ * 前端不再自行维护「哪些键能绑在哪」：能力（当前输入后端注入得了什么）与策略（产品上
+ * 让不让绑）都只有 `packages/qzh-profile/src/key_policy.rs` 一份，配置文件导入与托盘
+ * 切换配置根本不经过前端，判定必须以后端为准。
+ */
+export interface SlotPolicy {
+  /** 是否接受左右修饰键。 */
+  modifiers: boolean;
+  /** 接受的鼠标按钮；空数组表示该槽位完全不收鼠标与滚轮。 */
+  mouse: MouseButton[];
+}
+
+/** 四个槽位的允许集。输入模式切换后需要重新拉取。 */
+export interface KeyPolicies {
+  hotkey: SlotPolicy;
+  trigger: SlotPolicy;
+  target: SlotPolicy;
+  trigger_target: SlotPolicy;
+  /** 当前后端能否支持切换连发的重合态（启动键与连发按键相同）。 */
+  coincident_toggle: boolean;
+}
+
+/** 后端未就绪时的兜底：只收键盘普通键，最保守。 */
+export const RESTRICTIVE_POLICY: SlotPolicy = { modifiers: false, mouse: [] };
+
+/** 浏览器 `KeyboardEvent.code` → VK；`includeModifiers` 为 true 时额外接受修饰键。 */
+export function vkFromCode(code: string, includeModifiers = false): number | undefined {
+  return BROWSER_VK[code] ?? (includeModifiers ? MODIFIER_VK[code] : undefined);
+}
+
 const MOUSE_NAMES: Record<MouseButton, string> = {
   left: '鼠标左键',
   right: '鼠标右键',
@@ -256,13 +312,29 @@ export function keyLabel(key: KeyId | null | undefined): string {
   return KEY_NAMES[vk] ?? `0x${vk.toString(16).toUpperCase()}`;
 }
 
+/**
+ * 一次按键被捕获逻辑丢弃的原因。组件本身不弹提示，交由使用方决定文案与呈现方式，
+ * 避免基础组件耦合 Toast。`code` 为浏览器 `KeyboardEvent.code`，用于告诉用户按了什么。
+ */
+export type CaptureReject =
+  /** 修饰键，且该槽位不收。 */
+  | { reason: 'modifier'; code: string }
+  /** 前端的 code → VK 表里没有这个键。 */
+  | { reason: 'unknown'; code: string }
+  /** 该槽位完全不收鼠标与滚轮（全局热键）。 */
+  | { reason: 'mouse' }
+  /** 该槽位收鼠标，但当前输入模式注入不了这个按钮（DD-HID 的侧键）。 */
+  | { reason: 'mouse-unsupported'; button: MouseButton };
+
 interface Props {
   value: KeyId | null;
   onChange: (key: KeyId | null) => void;
   /** 为 true 时，允许右键清空已绑定按键。 */
   nullable?: boolean;
-  /** 为 true 时只接受键盘键，忽略鼠标按键 / 滚轮（全局热键只允许绑定实体键）。 */
-  keyboardOnly?: boolean;
+  /** 该槽位的允许集，来自后端 `get_key_policy`。 */
+  policy: SlotPolicy;
+  /** 按键被丢弃时回调，供页面提示用户；不传则静默忽略。 */
+  onReject?: (info: CaptureReject) => void;
   placeholder?: string;
   /** 冲突级别，用于着色提示。 */
   conflict?: 'error' | 'warning' | null;
@@ -280,7 +352,8 @@ export default function KeyCapture({
   value,
   onChange,
   nullable,
-  keyboardOnly,
+  policy,
+  onReject,
   placeholder,
   conflict,
 }: Props) {
@@ -300,30 +373,50 @@ export default function KeyCapture({
     const keyboardHandler = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const vk = BROWSER_VK[e.code];
+      const vk = vkFromCode(e.code, policy.modifiers);
       if (vk !== undefined) {
         onChange(keyboardKey(vk));
         setCapturing(false);
+        return;
       }
+      onReject?.(
+        MODIFIER_VK[e.code] !== undefined
+          ? { reason: 'modifier', code: e.code }
+          : { reason: 'unknown', code: e.code || e.key },
+      );
+      setCapturing(false);
     };
 
     const mouseHandler = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      // 只允许实体键时忽略鼠标按键，但仍吞掉事件、保持捕获态等待键盘输入。
-      if (keyboardOnly) return;
+      // 事件一律吞掉、保持捕获态等待下一次输入，只是不一定录入。
       const btn = MOUSE_BUTTON_MAP[e.button];
-      if (btn !== undefined) {
+      if (btn !== undefined && policy.mouse.includes(btn)) {
         onChange(mouseKey(btn));
         setCapturing(false);
+        return;
       }
+      onReject?.(
+        policy.mouse.length === 0 || btn === undefined
+          ? { reason: 'mouse' }
+          : { reason: 'mouse-unsupported', button: btn },
+      );
     };
 
     const wheelHandler = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (keyboardOnly) return;
-      onChange(mouseKey(e.deltaY < 0 ? 'wheel_up' : 'wheel_down'));
+      const btn: MouseButton = e.deltaY < 0 ? 'wheel_up' : 'wheel_down';
+      if (!policy.mouse.includes(btn)) {
+        onReject?.(
+          policy.mouse.length === 0
+            ? { reason: 'mouse' }
+            : { reason: 'mouse-unsupported', button: btn },
+        );
+        return;
+      }
+      onChange(mouseKey(btn));
       setCapturing(false);
     };
 
@@ -340,7 +433,7 @@ export default function KeyCapture({
       window.removeEventListener('wheel', wheelHandler, { capture: true });
       window.removeEventListener('contextmenu', contextMenuHandler, { capture: true });
     };
-  }, [capturing, onChange, keyboardOnly]);
+  }, [capturing, onChange, policy, onReject]);
 
   return (
     <button

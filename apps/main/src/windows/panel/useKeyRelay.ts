@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef } from 'react';
-import { BROWSER_VK, keyboardKey, type KeyId } from './components/KeyCapture';
+import { keyboardKey, type KeyId, vkFromCode } from './components/KeyCapture';
 
 interface RelayKeyResult {
   accepted_physical: boolean;
@@ -41,7 +41,7 @@ export function useKeyRelay(): void {
     const downHandler = (e: KeyboardEvent) => {
       const allowDefault = isEditableKeyboardTarget(e.target);
       if (!allowDefault) e.preventDefault();
-      const vk = BROWSER_VK[e.code];
+      const vk = vkFromCode(e.code, true);
       if (vk !== undefined) {
         const key = keyboardKey(vk);
         if (!e.repeat) {
@@ -67,7 +67,7 @@ export function useKeyRelay(): void {
     };
     const upHandler = (e: KeyboardEvent) => {
       if (!isEditableKeyboardTarget(e.target)) e.preventDefault();
-      const vk = BROWSER_VK[e.code];
+      const vk = vkFromCode(e.code, true);
       if (vk !== undefined) {
         const key = keyboardKey(vk);
         const token = keyToken(key);

@@ -27,7 +27,11 @@ pub fn load_or_init_profile(app: &tauri::AppHandle, engine: &Arc<BurstEngine>) {
 
     match active_path {
         Some(path) => match load_profile_from_path(&path, &profiles_dir) {
-            Ok(profile) => {
+            Ok(mut profile) => {
+                // 旧版本写下的、或他人分享的配置可能含当前版本不支持的按键。此处先净化，
+                // 结果存进 ProfileNotice，等前端挂载后取走弹窗提醒（此刻窗口还没建，
+                // 直接发事件会丢）。
+                crate::commands::profile::sanitize_and_record(app, &mut profile);
                 engine.set_hotkeys(profile.hotkeys);
                 engine.set_rules(profile.rules);
                 info!("已加载配置: {}", path);

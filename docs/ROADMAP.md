@@ -765,7 +765,7 @@ payload：`version u8` / `issue_time u64`（防时钟回拨下界校验）/ `exp
 - [x] schema v1→v2 自动迁移：旧裸 VK 包装为 `{kind:"keyboard",code:VK}`，可选字段 `null` 保留
 - [x] 全局物理按键 hook 扩鼠标：与键盘 hook 共用消息循环线程加装 `WH_MOUSE_LL`，识别 5 键 + `WM_XBUTTONDOWN/UP` 高 16 位的 X1/X2，过滤 SIM_MARKER 与自循环
 - [x] 三通道注入支持鼠标 5 键：SendInput `INPUT_MOUSE` + `MOUSEEVENTF_*`、DD `DD_btn`（X1/X2 不在值域，自动回退 SendInput + 一次 warn）、Interception `InterceptionMouseStroke` + 鼠标设备扫描
-- [x] 前端 KeyCapture 扩约 120 项键盘白名单（F13–F24 / 小键盘 / OEM 标点 / 编辑键 / 修饰键独立位）+ 鼠标 5 键 onMouseDown 录入
+- [x] 前端 KeyCapture 扩约 120 项键盘白名单（F13–F24 / 小键盘 / OEM 标点 / 编辑键）+ 鼠标 5 键 onMouseDown 录入；修饰键左右独立位单列 `MODIFIER_VK`，仅全局热键开放
 - [x] DD-HID schema validate 拦截 `target_key = Mouse(X1|X2)`，UI 提示用户改用 SendInput / Interception 模式
 
 **v0.2 收尾能力**

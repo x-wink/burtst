@@ -1,0 +1,414 @@
+use super::*;
+use crate::profile::BurstMode;
+
+fn kb(vk: u32) -> KeyId {
+    KeyId::Keyboard(vk)
+}
+
+fn ms(btn: MouseButton) -> KeyId {
+    KeyId::Mouse(btn)
+}
+
+const RIGHT_ALT: u32 = 0xa5;
+const KEY_Q: u32 = 0x51;
+
+fn dd_hid() -> InjectCaps {
+    InjectCaps {
+        side_button: false,
+        coincident_toggle: false,
+    }
+}
+
+/// 只收紧侧键、保留重合态，用于把两条约束分开验证。
+fn no_side_button() -> InjectCaps {
+    InjectCaps {
+        side_button: false,
+        coincident_toggle: true,
+    }
+}
+
+fn rule(trigger: KeyId, target: KeyId, stop: Option<KeyId>) -> BurstRule {
+    BurstRule {
+        id: "r1".to_string(),
+        enabled: true,
+        trigger_key: trigger,
+        target_key: target,
+        mode: BurstMode::Toggle,
+        stop_key: stop,
+        interval_ms: 10,
+        group: None,
+    }
+}
+
+// ── 修饰键：只有热键槽接受 ───────────────────────────────────────────────────
+
+#[test]
+fn modifier_accepted_only_in_hotkey_slot() {
+    let caps = InjectCaps::default();
+    assert!(accepts(KeySlot::Hotkey, kb(RIGHT_ALT), caps).is_ok());
+    for slot in [KeySlot::Trigger, KeySlot::Target, KeySlot::TriggerTarget] {
+        assert_eq!(
+            accepts(slot, kb(RIGHT_ALT), caps),
+            Err(KeyRejection::ModifierNotAllowed),
+            "{slot:?} 不应接受修饰键"
+        );
+    }
+}
+
+#[test]
+fn every_listed_modifier_is_recognized() {
+    for vk in MODIFIER_VKS {
+        assert!(is_modifier_vk(vk), "0x{vk:x} 应被认作修饰键");
+    }
+    assert!(!is_modifier_vk(KEY_Q));
+}
+
+#[test]
+fn ordinary_keyboard_key_accepted_everywhere() {
+    let caps = InjectCaps::default();
+    for slot in [
+        KeySlot::Hotkey,
+        KeySlot::Trigger,
+        KeySlot::Target,
+        KeySlot::TriggerTarget,
+    ] {
+        assert!(accepts(slot, kb(KEY_Q), caps).is_ok(), "{slot:?}");
+    }
+}
+
+// ── 鼠标：热键槽全禁，其余按后端能力 ─────────────────────────────────────────
+
+#[test]
+fn hotkey_slot_rejects_every_mouse_button() {
+    let caps = InjectCaps::default();
+    for btn in ALL_MOUSE_BUTTONS {
+        assert_eq!(
+            accepts(KeySlot::Hotkey, ms(btn), caps),
+            Err(KeyRejection::MouseNotAllowed),
+            "{btn:?}"
+        );
+    }
+}
+
+#[test]
+fn side_button_readable_but_not_injectable_under_dd_hid() {
+    // 读角色不受注入能力影响：DD-HID 下侧键仍可做启动键。
+    assert!(accepts(KeySlot::Trigger, ms(MouseButton::X1), no_side_button()).is_ok());
+    // 写角色受限，重合态因为也写所以同样受限。
+    for slot in [KeySlot::Target, KeySlot::TriggerTarget] {
+        assert_eq!(
+            accepts(slot, ms(MouseButton::X1), no_side_button()),
+            Err(KeyRejection::SideButtonNotInjectable),
+            "{slot:?}"
+        );
+    }
+}
+
+#[test]
+fn side_button_injectable_when_backend_supports_it() {
+    let caps = InjectCaps::default();
+    for slot in [KeySlot::Target, KeySlot::TriggerTarget] {
+        assert!(accepts(slot, ms(MouseButton::X1), caps).is_ok(), "{slot:?}");
+        assert!(accepts(slot, ms(MouseButton::X2), caps).is_ok(), "{slot:?}");
+    }
+}
+
+#[test]
+fn non_side_mouse_buttons_unaffected_by_backend_caps() {
+    for btn in [
+        MouseButton::Left,
+        MouseButton::Right,
+        MouseButton::Middle,
+        MouseButton::WheelUp,
+        MouseButton::WheelDown,
+    ] {
+        assert!(accepts(KeySlot::Target, ms(btn), no_side_button()).is_ok(), "{btn:?}");
+    }
+}
+
+// ── 重合态取交集，不是并集 ───────────────────────────────────────────────────
+
+#[test]
+fn coincident_slot_is_intersection_of_read_and_write() {
+    let caps = no_side_button();
+    for btn in ALL_MOUSE_BUTTONS {
+        let readable = accepts(KeySlot::Trigger, ms(btn), caps).is_ok();
+        let writable = accepts(KeySlot::Target, ms(btn), caps).is_ok();
+        let both = accepts(KeySlot::TriggerTarget, ms(btn), caps).is_ok();
+        assert_eq!(both, readable && writable, "{btn:?} 重合态应为交集");
+    }
+}
+
+// ── 槽位导出与判定同源 ───────────────────────────────────────────────────────
+
+#[test]
+fn slot_policy_matches_accepts() {
+    for caps in [InjectCaps::default(), no_side_button()] {
+        for slot in [
+            KeySlot::Hotkey,
+            KeySlot::Trigger,
+            KeySlot::Target,
+            KeySlot::TriggerTarget,
+        ] {
+            let policy = slot_policy(slot, caps);
+            assert_eq!(
+                policy.modifiers,
+                accepts(slot, kb(RIGHT_ALT), caps).is_ok(),
+                "{slot:?} 修饰键位不一致"
+            );
+            for btn in ALL_MOUSE_BUTTONS {
+                assert_eq!(
+                    policy.mouse.contains(&btn),
+                    accepts(slot, ms(btn), caps).is_ok(),
+                    "{slot:?} {btn:?} 不一致"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn hotkey_policy_allows_modifiers_and_no_mouse() {
+    let p = slot_policy(KeySlot::Hotkey, InjectCaps::default());
+    assert!(p.modifiers);
+    assert!(p.mouse.is_empty());
+}
+
+#[test]
+fn dd_hid_target_policy_drops_side_buttons_only() {
+    let p = slot_policy(KeySlot::Target, no_side_button());
+    assert!(!p.modifiers);
+    assert!(!p.mouse.contains(&MouseButton::X1));
+    assert!(!p.mouse.contains(&MouseButton::X2));
+    assert!(p.mouse.contains(&MouseButton::Left));
+    assert!(p.mouse.contains(&MouseButton::WheelUp));
+}
+
+// ── 规则里的槽位归属 ─────────────────────────────────────────────────────────
+
+#[test]
+fn distinct_trigger_and_target_split_into_pure_roles() {
+    let r = rule(kb(KEY_Q), ms(MouseButton::Left), None);
+    assert_eq!(slot_of(&r, kb(KEY_Q)), KeySlot::Trigger);
+    assert_eq!(slot_of(&r, ms(MouseButton::Left)), KeySlot::Target);
+}
+
+#[test]
+fn same_trigger_and_target_is_coincident() {
+    let r = rule(kb(KEY_Q), kb(KEY_Q), None);
+    assert_eq!(slot_of(&r, kb(KEY_Q)), KeySlot::TriggerTarget);
+}
+
+#[test]
+fn stop_key_equal_to_target_is_coincident() {
+    let r = rule(kb(KEY_Q), ms(MouseButton::Left), Some(ms(MouseButton::Left)));
+    assert_eq!(slot_of(&r, ms(MouseButton::Left)), KeySlot::TriggerTarget);
+}
+
+#[test]
+fn explicit_stop_key_is_read_only() {
+    let r = rule(kb(KEY_Q), ms(MouseButton::Left), Some(kb(0x52)));
+    assert_eq!(slot_of(&r, kb(0x52)), KeySlot::Trigger);
+}
+
+// ── 违规扫描 ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn rule_violation_found_for_modifier_target() {
+    let rules = vec![rule(kb(KEY_Q), kb(RIGHT_ALT), None)];
+    let found = find_rule_violations(&rules, InjectCaps::default());
+    assert_eq!(found, vec![("r1".to_string(), KeyRejection::ModifierNotAllowed)]);
+}
+
+#[test]
+fn rule_violation_found_for_side_button_target_under_dd_hid() {
+    let rules = vec![rule(kb(KEY_Q), ms(MouseButton::X1), None)];
+    let found = find_rule_violations(&rules, no_side_button());
+    assert_eq!(
+        found,
+        vec![("r1".to_string(), KeyRejection::SideButtonNotInjectable)]
+    );
+}
+
+#[test]
+fn side_button_trigger_is_not_a_violation_under_dd_hid() {
+    // 侧键做启动键只被读，不经注入通道，不该被拦。
+    let rules = vec![rule(ms(MouseButton::X1), kb(KEY_Q), None)];
+    assert!(find_rule_violations(&rules, no_side_button()).is_empty());
+}
+
+#[test]
+fn disabled_rules_are_skipped() {
+    let mut r = rule(kb(KEY_Q), kb(RIGHT_ALT), None);
+    r.enabled = false;
+    assert!(find_rule_violations(&[r], InjectCaps::default()).is_empty());
+}
+
+#[test]
+fn duplicate_keys_reported_once_per_rule() {
+    // trigger == target == stop，同一个键只该报一次。
+    let rules = vec![rule(kb(RIGHT_ALT), kb(RIGHT_ALT), Some(kb(RIGHT_ALT)))];
+    assert_eq!(find_rule_violations(&rules, InjectCaps::default()).len(), 1);
+}
+
+#[test]
+fn clean_rules_report_nothing() {
+    let rules = vec![rule(kb(KEY_Q), ms(MouseButton::Left), None)];
+    assert!(find_rule_violations(&rules, InjectCaps::default()).is_empty());
+}
+
+// ── 热键净化 ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn sanitize_drops_mouse_hotkeys_and_keeps_keyboard_ones() {
+    let mut hk = Hotkeys {
+        global_toggle: Some(ms(MouseButton::Left)),
+        global_stop: Some(kb(RIGHT_ALT)),
+        panel_toggle: Some(ms(MouseButton::WheelUp)),
+    };
+    let dropped = sanitize_hotkeys(&mut hk);
+    assert_eq!(dropped, vec!["global_toggle", "panel_toggle"]);
+    assert_eq!(hk.global_toggle, None);
+    assert_eq!(hk.global_stop, Some(kb(RIGHT_ALT)));
+    assert_eq!(hk.panel_toggle, None);
+}
+
+#[test]
+fn sanitize_is_noop_for_valid_hotkeys() {
+    let mut hk = Hotkeys {
+        global_toggle: Some(kb(KEY_Q)),
+        global_stop: None,
+        panel_toggle: Some(kb(RIGHT_ALT)),
+    };
+    let before = hk.clone();
+    assert!(sanitize_hotkeys(&mut hk).is_empty());
+    assert_eq!(hk.global_toggle, before.global_toggle);
+    assert_eq!(hk.panel_toggle, before.panel_toggle);
+}
+
+#[test]
+fn slot_injects_flags_write_roles_only() {
+    assert!(!KeySlot::Hotkey.injects());
+    assert!(!KeySlot::Trigger.injects());
+    assert!(KeySlot::Target.injects());
+    assert!(KeySlot::TriggerTarget.injects());
+}
+
+// ── 加载期净化 ───────────────────────────────────────────────────────────────
+
+fn profile_with(rules: Vec<BurstRule>, hotkeys: Hotkeys) -> Profile {
+    Profile {
+        schema_version: crate::profile::CURRENT_SCHEMA_VERSION,
+        meta: crate::profile::ProfileMeta {
+            name: "t".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            app_version: "0".to_string(),
+        },
+        rules,
+        hotkeys,
+        advanced: Default::default(),
+    }
+}
+
+#[test]
+fn sanitize_disables_offending_rule_without_touching_its_keys() {
+    let mut p = profile_with(
+        vec![rule(kb(KEY_Q), kb(RIGHT_ALT), None)],
+        Hotkeys::default(),
+    );
+    let report = sanitize_profile(&mut p, InjectCaps::default());
+
+    assert_eq!(report.disabled_rules.len(), 1);
+    assert_eq!(report.disabled_rules[0].id, "r1");
+    assert_eq!(
+        report.disabled_rules[0].reason,
+        KeyRejection::ModifierNotAllowed
+    );
+    assert!(!p.rules[0].enabled, "违规规则应被停用");
+    // 按键原样保留：改写成空会造出新的中间态，连锁面太大。
+    assert_eq!(p.rules[0].target_key, kb(RIGHT_ALT));
+    assert_eq!(p.rules[0].trigger_key, kb(KEY_Q));
+}
+
+#[test]
+fn sanitize_clears_mouse_hotkey() {
+    let mut p = profile_with(
+        vec![],
+        Hotkeys {
+            global_toggle: Some(ms(MouseButton::Left)),
+            global_stop: None,
+            panel_toggle: None,
+        },
+    );
+    let report = sanitize_profile(&mut p, InjectCaps::default());
+    assert_eq!(report.cleared_hotkeys, vec!["global_toggle"]);
+    assert_eq!(p.hotkeys.global_toggle, None);
+}
+
+#[test]
+fn sanitize_reports_nothing_for_clean_profile() {
+    let mut p = profile_with(
+        vec![rule(kb(KEY_Q), ms(MouseButton::Left), None)],
+        Hotkeys {
+            global_toggle: Some(kb(RIGHT_ALT)),
+            global_stop: None,
+            panel_toggle: None,
+        },
+    );
+    let report = sanitize_profile(&mut p, InjectCaps::default());
+    assert!(report.is_empty());
+    assert!(p.rules[0].enabled);
+    assert_eq!(p.hotkeys.global_toggle, Some(kb(RIGHT_ALT)));
+}
+
+#[test]
+fn sanitize_respects_backend_caps() {
+    let mut p = profile_with(vec![rule(kb(KEY_Q), ms(MouseButton::X1), None)], Hotkeys::default());
+    // 宽松能力下侧键目标合法，不动。
+    assert!(sanitize_profile(&mut p, InjectCaps::default()).is_empty());
+    assert!(p.rules[0].enabled);
+    // DD-HID 能力下注入不了侧键，停用。
+    let report = sanitize_profile(&mut p, no_side_button());
+    assert_eq!(report.disabled_rules.len(), 1);
+    assert!(!p.rules[0].enabled);
+}
+
+// ── DD 下 Toggle 的重合态是空集 ──────────────────────────────────────────────
+
+#[test]
+fn dd_rejects_coincident_toggle_regardless_of_key() {
+    for key in [kb(KEY_Q), ms(MouseButton::Left)] {
+        let rules = vec![rule(key, key, None)];
+        let found = find_rule_violations(&rules, dd_hid());
+        assert_eq!(
+            found,
+            vec![("r1".to_string(), KeyRejection::CoincidentToggleUnsupported)],
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn dd_rejects_toggle_stop_key_equal_to_target() {
+    let rules = vec![rule(kb(KEY_Q), kb(0x52), Some(kb(0x52)))];
+    let found = find_rule_violations(&rules, dd_hid());
+    assert_eq!(
+        found,
+        vec![("r1".to_string(), KeyRejection::CoincidentToggleUnsupported)]
+    );
+}
+
+#[test]
+fn dd_allows_coincident_hold() {
+    // Hold 的重合态不可靠但已被接受，不该拦。
+    let mut r = rule(kb(KEY_Q), kb(KEY_Q), None);
+    r.mode = BurstMode::Hold;
+    assert!(find_rule_violations(&[r], dd_hid()).is_empty());
+}
+
+#[test]
+fn dd_allows_toggle_with_distinct_keys() {
+    let rules = vec![rule(kb(KEY_Q), kb(0x52), None)];
+    assert!(find_rule_violations(&rules, dd_hid()).is_empty());
+}

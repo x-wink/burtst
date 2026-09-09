@@ -17,7 +17,17 @@ import ContextMenu, { type ContextMenuItem } from './components/ContextMenu';
 import IntervalInput from './components/IntervalInput';
 import { ChevronIcon, CloseIcon, EditIcon, MenuIcon, MinimizeIcon } from './components/icons';
 import Kbd from './components/Kbd';
-import KeyCapture, { keyboardKey, keyEq, keyLabel, type KeyId } from './components/KeyCapture';
+
+import KeyCapture, {
+  type CaptureReject,
+  type KeyPolicies,
+  RESTRICTIVE_POLICY,
+  keyboardKey,
+  keyEq,
+  keyLabel,
+  mouseKey,
+  type KeyId,
+} from './components/KeyCapture';
 import Overlay from './components/Overlay';
 import ProfileNameForm from './components/ProfileNameForm';
 import Tabs from './components/Tabs';
@@ -46,6 +56,19 @@ import {
 } from './theme';
 import UpdateNoticeDialog, { type UpdateNoticeInfo } from './dialogs/UpdateNoticeDialog';
 import './PanelApp.css';
+
+/** 后端 `take_profile_notice` 的返回形态，与 `qzh_profile::SanitizeReport` 同源。 */
+interface SanitizeReport {
+  cleared_hotkeys: string[];
+  disabled_rules: { id: string; reason: string }[];
+}
+
+/** 热键字段名 → 用户可见名称，用于净化提醒文案。 */
+const HOTKEY_LABELS: Record<string, string> = {
+  global_toggle: '全局开启键',
+  global_stop: '全局停止键',
+  panel_toggle: '面板显隐键',
+};
 
 const settingsStore = new LazyStore('settings.json');
 const CLOSE_BEHAVIOR_KEY = 'closeBehavior';
@@ -196,8 +219,7 @@ function isDdInputMode(mode: InputMode): boolean {
 
 const DD_HID_BLOCKED_NOTICE = (
   <>
-    经测试 DDHID
-    驱动不稳定，可能导致电脑蓝屏死机，现已禁用。需待新版本发布并通过内测验证稳定后，才可能重新开放。
+    经测试 DDHID 驱动不稳定，可能导致电脑蓝屏死机，已永久停用，不会再开放。
     <br />
     <br />
     建议以管理员模式运行本应用、改用「游戏模式」；并在「诊断修复」中卸载 DDHID
@@ -416,6 +438,43 @@ export default function PanelApp() {
   const conflicts = useMemo(() => detectConflicts(rules, hotkeys), [rules, hotkeys]);
   const confirm = useConfirm();
   const toast = useToast();
+
+  // 按键允许集来自后端（`packages/qzh-profile/src/key_policy.rs` 是唯一的表）。
+  // 后端未答复前用最保守的兜底，避免这一小段时间里放行了当前模式其实不支持的键。
+  const [keyPolicies, setKeyPolicies] = useState<KeyPolicies>({
+    hotkey: RESTRICTIVE_POLICY,
+    trigger: RESTRICTIVE_POLICY,
+    target: RESTRICTIVE_POLICY,
+    trigger_target: RESTRICTIVE_POLICY,
+    coincident_toggle: true,
+  });
+
+  useEffect(() => {
+    invoke<KeyPolicies>('get_key_policy')
+      .then(setKeyPolicies)
+      .catch(() => {});
+  }, [inputMode]);
+
+  // 连发规则不开放修饰键（见 KeyCapture 的 MODIFIER_VK 注释）；连同查表落空的键一起提示，
+  // 否则这次按键被静默丢弃、用户无从判断原因。稳定引用避免 KeyCapture 每次渲染重挂监听。
+  const notifyRuleKeyReject = useCallback(
+    (info: CaptureReject) => {
+      if (info.reason === 'modifier') {
+        toast.warning('修饰键只能绑定全局热键，连发规则请换其它按键');
+        return;
+      }
+      if (info.reason === 'unknown') {
+        toast.warning(`不支持绑定这个按键（${info.code}），请换一个`);
+        return;
+      }
+      if (info.reason === 'mouse-unsupported') {
+        toast.warning(
+          `当前输入模式无法注入${keyLabel(mouseKey(info.button))}，请换其它按键或切换输入模式`,
+        );
+      }
+    },
+    [toast],
+  );
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const updateProgressDoneTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const updateDownloadFailedRef = useRef(false);
@@ -444,6 +503,40 @@ export default function PanelApp() {
       ddHidNoticeOpenRef.current = false;
     }
   }, [confirm]);
+
+  // 加载配置时被净化掉的项，取走一次就弹一次。启动加载先于窗口创建，事件会丢，
+  // 故后端把结果存在 ProfileNotice 里等前端来取；运行期切换配置再靠事件触发这里重取。
+  const showProfileNotice = useCallback(async () => {
+    const notice = await invoke<SanitizeReport | null>('take_profile_notice').catch(() => null);
+    if (!notice) return;
+    const lines: string[] = [];
+    if (notice.cleared_hotkeys.length > 0) {
+      const names = notice.cleared_hotkeys.map((f) => HOTKEY_LABELS[f] ?? f).join('、');
+      lines.push(`${names}原先绑定的按键当前版本不支持，已清除，请重新设置。`);
+    }
+    if (notice.disabled_rules.length > 0) {
+      lines.push(
+        `${notice.disabled_rules.length} 条规则用到了当前输入模式不支持的按键，已暂时停用。` +
+          '按键没有改动，改成支持的键后重新勾选启用即可。',
+      );
+    }
+    await confirm({
+      title: '部分配置已调整',
+      description: lines.join('\n'),
+      confirmText: '知道了',
+      cancelText: null,
+    });
+  }, [confirm]);
+
+  useEffect(() => {
+    void showProfileNotice();
+    const un = listen('profile-sanitized', () => {
+      void showProfileNotice();
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [showProfileNotice]);
 
   const applyAppStatus = useCallback(
     (status: AppStatus) => {
@@ -1318,11 +1411,22 @@ export default function PanelApp() {
     }
   }
 
-  function switchLayout(next: PanelLayout) {
-    // DD 系列与横版键鼠图互斥：DD 驱动下禁止切到横版。
-    if (next === 'horizontal' && isDdInputMode(inputMode)) {
-      toast.warning('DD 驱动模式不支持横版键鼠图，请先切换到游戏模式或通用模式');
-      return;
+  async function switchLayout(next: PanelLayout) {
+    // 横版是单键模型，每个键位都是 trigger == target 的重合态。后端下发的
+    // coincident_toggle 为 false 时（当前是 DD 系列）切换连发建不出来，故禁止切到横版。
+    // 判断依据取自后端能力位而不是模式名，新增后端时不必再改这里。
+    //
+    // 这里刻意重新拉一次而不用缓存：切换输入模式后策略是异步重取的，在它返回之前
+    // keyPolicies 还是旧模式的值，用户紧接着点布局就会被错误放行，且该状态会写进 settings。
+    if (next === 'horizontal') {
+      const live = await invoke<KeyPolicies>('get_key_policy').catch(() => keyPolicies);
+      setKeyPolicies(live);
+      if (!live.coincident_toggle) {
+        toast.warning(
+          `${INPUT_MODE_LABELS[inputMode]}不支持横版键鼠图，请先切换到游戏模式或通用模式`,
+        );
+        return;
+      }
     }
     setLayout(next);
     void applyWindowSize(next);
@@ -1845,12 +1949,14 @@ export default function PanelApp() {
         <div className="window-controls">
           <button
             className="win-btn"
-            onClick={() => switchLayout(layout === 'vertical' ? 'horizontal' : 'vertical')}
-            disabled={isDdInputMode(inputMode) && layout === 'vertical'}
+            onClick={() => void switchLayout(layout === 'vertical' ? 'horizontal' : 'vertical')}
+            // 用 aria-disabled 而非 disabled：disabled 的按钮不触发 onClick，
+            // switchLayout 里的原因提示就永远跑不到，点下去毫无反应。
+            aria-disabled={!keyPolicies.coincident_toggle && layout === 'vertical'}
             aria-label="切换布局"
             title={
-              isDdInputMode(inputMode) && layout === 'vertical'
-                ? 'DD 驱动模式不支持横版键鼠图'
+              !keyPolicies.coincident_toggle && layout === 'vertical'
+                ? `${INPUT_MODE_LABELS[inputMode]}不支持横版键鼠图`
                 : layout === 'vertical'
                   ? '切换到横版键鼠图'
                   : '切换到竖版规则列表'
@@ -1916,6 +2022,7 @@ export default function PanelApp() {
 
         {layout === 'horizontal' && (
           <HorizontalLayout
+            policy={keyPolicies.trigger_target}
             rules={rules}
             activeRuleIds={activeRuleIds}
             conflicts={conflicts}
@@ -1997,6 +2104,10 @@ export default function PanelApp() {
                               <div className="rule-field">
                                 <label>连发按键</label>
                                 <KeyCapture
+                                  onReject={notifyRuleKeyReject}
+                                  policy={
+                                    showAdvanced ? keyPolicies.target : keyPolicies.trigger_target
+                                  }
                                   value={rule.target_key}
                                   onChange={(vk) => {
                                     if (!vk) return;
@@ -2032,6 +2143,8 @@ export default function PanelApp() {
                               <div className="rule-field">
                                 <label>按压键</label>
                                 <KeyCapture
+                                  onReject={notifyRuleKeyReject}
+                                  policy={keyPolicies.trigger}
                                   value={rule.trigger_key}
                                   onChange={(vk) => vk && updateRule(rule.id, { trigger_key: vk })}
                                   conflict={severityForRule(conflicts, rule.id)}
@@ -2131,6 +2244,8 @@ export default function PanelApp() {
                       <div className="rule-field">
                         <label>启动热键</label>
                         <KeyCapture
+                          onReject={notifyRuleKeyReject}
+                          policy={keyPolicies.trigger}
                           value={rule.trigger_key}
                           onChange={(vk) => vk && updateRule(rule.id, { trigger_key: vk })}
                           conflict={severityForRule(conflicts, rule.id)}
@@ -2140,6 +2255,8 @@ export default function PanelApp() {
                       <div className="rule-field">
                         <label>连发按键</label>
                         <KeyCapture
+                          onReject={notifyRuleKeyReject}
+                          policy={keyPolicies.target}
                           value={rule.target_key}
                           onChange={(vk) => vk && updateRule(rule.id, { target_key: vk })}
                           conflict={severityForRule(conflicts, rule.id)}
@@ -2168,6 +2285,8 @@ export default function PanelApp() {
                       <div className="rule-field">
                         <label>停止热键</label>
                         <KeyCapture
+                          onReject={notifyRuleKeyReject}
+                          policy={keyPolicies.trigger}
                           value={rule.stop_key ?? rule.trigger_key}
                           onChange={(vk) => vk && updateRule(rule.id, { stop_key: vk })}
                         />
@@ -2662,6 +2781,7 @@ export default function PanelApp() {
             void selectInputMode(mode);
           }}
           hotkeys={hotkeys}
+          hotkeyPolicy={keyPolicies.hotkey}
           hotkeyConflicts={{
             global_toggle: severityForKey(conflicts, hotkeys.global_toggle),
             global_stop: severityForKey(conflicts, hotkeys.global_stop),

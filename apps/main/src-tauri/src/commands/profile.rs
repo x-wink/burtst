@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 use tracing::{info, warn};
 
@@ -173,14 +173,51 @@ pub fn save_profile(
     Ok(path)
 }
 
-/// 激活一份已在 profiles 目录中的配置文件：读取（解密 / 迁移 / 钳位 / 校验）→
+/// 加载期净化的待提醒结果。启动加载先于窗口创建，事件会丢，故一律先存这里，
+/// 前端挂载时用 `take_profile_notice` 取走；运行期切换配置再额外发一次事件即时提醒。
+#[derive(Default)]
+pub struct ProfileNotice(pub std::sync::Mutex<Option<qzh_profile::SanitizeReport>>);
+
+/// 按当前输入模式净化配置，记日志并登记待提醒。返回是否有改动。
+pub(crate) fn sanitize_and_record(app: &AppHandle, profile: &mut Profile) -> bool {
+    let caps = crate::commands::engine::current_inject_caps();
+    let report = qzh_profile::sanitize_profile(profile, caps);
+    if report.is_empty() {
+        return false;
+    }
+    warn!(
+        "配置含当前版本不支持的按键：清空热键 {:?}，停用规则 {:?}",
+        report.cleared_hotkeys, report.disabled_rules
+    );
+    if let Some(state) = app.try_state::<ProfileNotice>() {
+        if let Ok(mut slot) = state.0.lock() {
+            *slot = Some(report);
+        }
+    }
+    true
+}
+
+/// 取走待提醒的净化结果。前端挂载时调用一次；取走即清空，不重复弹窗。
+#[tauri::command]
+pub fn take_profile_notice(
+    state: State<ProfileNotice>,
+) -> Option<qzh_profile::SanitizeReport> {
+    state.0.lock().ok().and_then(|mut slot| slot.take())
+}
+
+/// 激活一份已在 profiles 目录中的配置文件：读取（解密 / 迁移 / 钳位 / 校验）→ 净化 →
 /// 装载引擎 → 更新 `activeProfilePath`。[`load_profile`] 命令与托盘切换共用此入口。
 pub(crate) fn activate_profile_file(
     app: &AppHandle,
     engine: &crate::engine::BurstEngine,
     path: &Path,
 ) -> Result<Profile, String> {
-    let profile = read_profile_from_file(path)?;
+    let mut profile = read_profile_from_file(path)?;
+    // 配置文件可能来自他人分享、旧版本或手工编辑，完全绕过前端的录入拦截，
+    // 不支持的按键必须在装载进引擎之前处理掉。
+    if sanitize_and_record(app, &mut profile) {
+        let _ = app.emit("profile-sanitized", ());
+    }
     engine.set_rules(profile.rules.clone());
     engine.set_hotkeys(profile.hotkeys.clone());
     set_active_path(app, &path.to_string_lossy());

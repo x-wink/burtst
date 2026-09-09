@@ -1,7 +1,11 @@
 ﻿//! 规则 CRUD + 输入模式切换 + 按键捕获。驱动管理已迁至 [`super::driver`]。
 
 use crate::engine::BurstEngine;
-use qzh_profile::{BurstRule, Hotkeys, KeyId, MAX_INTERVAL_MS, MAX_RULES, MIN_INTERVAL_MS};
+use qzh_profile::key_policy::{slot_policy, KeySlot, SlotPolicy};
+use qzh_profile::{
+    find_rule_violations, BurstRule, Hotkeys, InjectCaps, KeyId, KeyRejection, MAX_INTERVAL_MS,
+    MAX_RULES, MIN_INTERVAL_MS,
+};
 use serde::Serialize;
 use std::sync::{atomic::Ordering, Arc};
 #[allow(unused_imports)]
@@ -27,9 +31,83 @@ pub fn set_global_enabled(app: AppHandle, state: State<EngineState>, enabled: bo
 }
 
 /// 运行时更新全局热键（不写盘，写盘由 `save_profile` 负责）。
+///
+/// 与录入界面、配置文件加载共用 [`qzh_profile::key_policy`] 的判定：前端拦不住导入的
+/// `.qzh` 与手工编辑，最终把关落在这里。
 #[tauri::command]
-pub fn set_global_hotkeys(state: State<EngineState>, hotkeys: Hotkeys) {
+pub fn set_global_hotkeys(state: State<EngineState>, mut hotkeys: Hotkeys) -> Result<(), String> {
+    let dropped = qzh_profile::key_policy::sanitize_hotkeys(&mut hotkeys);
+    if !dropped.is_empty() {
+        return Err("全局热键只能绑定键盘按键（含左右修饰键）".to_string());
+    }
     state.0.set_hotkeys(hotkeys);
+    Ok(())
+}
+
+/// 四个录入槽位在当前输入模式下的允许集，供前端按键捕获组件查表。
+///
+/// 前端不再自行维护白名单：能力（后端注入得了什么）随输入模式变，策略（产品上让不让绑）
+/// 写在 [`qzh_profile::key_policy`]，两者都只有这一份。输入模式切换后需要重新拉取。
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyPolicies {
+    /// 三个全局热键槽。纯读。
+    pub hotkey: SlotPolicy,
+    /// 规则的启动键 / 停止键，且与连发按键不同。纯读。
+    pub trigger: SlotPolicy,
+    /// 规则的连发按键，且与启动 / 停止键不同。纯写。
+    pub target: SlotPolicy,
+    /// 启动键与连发按键重合（默认模式、横版单键）。读写取交集。
+    pub trigger_target: SlotPolicy,
+    /// 当前后端能否支持 Toggle 规则的重合态。为 false 时默认模式建不出切换连发。
+    pub coincident_toggle: bool,
+}
+
+#[tauri::command]
+pub fn get_key_policy() -> KeyPolicies {
+    let caps = current_inject_caps();
+    KeyPolicies {
+        hotkey: slot_policy(KeySlot::Hotkey, caps),
+        trigger: slot_policy(KeySlot::Trigger, caps),
+        target: slot_policy(KeySlot::Target, caps),
+        trigger_target: slot_policy(KeySlot::TriggerTarget, caps),
+        coincident_toggle: caps.coincident_toggle,
+    }
+}
+
+/// 当前输入后端的注入能力。非 Windows 无后端概念，按最宽松处理。
+pub(crate) fn current_inject_caps() -> InjectCaps {
+    #[cfg(windows)]
+    {
+        caps_for_mode(win_input::current_mode())
+    }
+    #[cfg(not(windows))]
+    {
+        InjectCaps::default()
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn caps_for_mode(mode: win_input::InputMode) -> InjectCaps {
+    InjectCaps {
+        side_button: !mode.forbids_side_button_target(),
+        coincident_toggle: !mode.requires_distinct_target_for_toggle(),
+    }
+}
+
+/// 拒绝原因的中文说明。文案留在应用层，`qzh-profile` 只给机器可读的枚举。
+pub(crate) fn rejection_message(reason: KeyRejection, mode_label: &str) -> String {
+    match reason {
+        KeyRejection::ModifierNotAllowed => {
+            "的按键是修饰键。修饰键只能绑定全局热键，请换其它按键。".to_string()
+        }
+        KeyRejection::MouseNotAllowed => "的按键不支持鼠标按键。".to_string(),
+        KeyRejection::SideButtonNotInjectable => {
+            format!("的连发按键是鼠标侧键，{mode_label} 模式无法注入。请改用左 / 右 / 中键或键盘键。")
+        }
+        KeyRejection::CoincidentToggleUnsupported => format!(
+            "是切换连发，且启动 / 停止键与连发按键相同，{mode_label} 模式不支持。请在高级设置里把连发按键改成另一个键。"
+        ),
+    }
 }
 
 #[tauri::command]
@@ -170,45 +248,19 @@ fn input_mode_label(mode: win_input::InputMode) -> &'static str {
     }
 }
 
-/// 校验规则集是否满足目标输入模式的约束：DD 系列要求 Toggle 目标键区别于启动/停止键；
-/// DD-HID 还禁止鼠标侧键（X1/X2）作目标。`set_rules`（编辑规则保存）与 `set_input_mode`
-/// （切换模式）共用同一校验，保证两入口约束一致。
+/// 校验规则集是否满足目标输入模式的约束。
+///
+/// 判定本身全部委托 [`qzh_profile::find_rule_violations`]，与 `Profile::validate_for_mode`
+/// 和加载期净化共用同一份表；这里只负责把机器可读的原因翻成用户看得懂的话。
+/// `set_rules`（编辑规则保存）与 `set_input_mode`（切换模式）共用此入口。
 #[cfg(windows)]
 fn check_rules_for_mode(rules: &[BurstRule], mode: win_input::InputMode) -> Result<(), String> {
-    use qzh_profile::key_id::{KeyId, MouseButton};
-    use qzh_profile::profile::BurstMode;
-
     let label = input_mode_label(mode);
-    let forbids_side_button = mode.forbids_side_button_target();
-    let distinct_target = mode.requires_distinct_target_for_toggle();
-    for rule in rules.iter().filter(|r| r.enabled) {
-        if forbids_side_button
-            && matches!(
-                rule.target_key,
-                KeyId::Mouse(MouseButton::X1) | KeyId::Mouse(MouseButton::X2)
-            )
-        {
-            return Err(format!(
-                "规则「{}」的目标键是鼠标侧键，{} 模式不支持。请把目标键改为左/右/中键或键盘键。",
-                rule.id, label
-            ));
-        }
-        if !distinct_target || !matches!(rule.mode, BurstMode::Toggle) {
-            continue;
-        }
-        if rule.target_key == rule.trigger_key {
-            return Err(format!(
-                "{} 模式下，切换连发规则「{}」的目标键不可与启动热键相同。请修改后再使用。",
-                label, rule.id
-            ));
-        }
-        let stop = rule.stop_key.unwrap_or(rule.trigger_key);
-        if rule.target_key == stop {
-            return Err(format!(
-                "{} 模式下，切换连发规则「{}」的目标键不可与停止热键相同。请修改后再使用。",
-                label, rule.id
-            ));
-        }
+    if let Some((rule, reason)) = find_rule_violations(rules, caps_for_mode(mode))
+        .into_iter()
+        .next()
+    {
+        return Err(format!("规则「{rule}」{}", rejection_message(reason, label)));
     }
     Ok(())
 }

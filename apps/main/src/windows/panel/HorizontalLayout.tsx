@@ -8,6 +8,7 @@ import {
   mouseKey,
   type KeyId,
   type MouseButton,
+  type SlotPolicy,
 } from './components/KeyCapture';
 import { type Conflict, severityForKey } from './conflicts';
 import {
@@ -40,6 +41,11 @@ export interface HRule {
 
 interface Props {
   rules: HRule[];
+  /**
+   * 单键模型的允许集：横版每个键位都是 `trigger == target` 的重合态，故用后端下发的
+   * `trigger_target` 槽。不在集合里的键只作观感、不可点，避免用户点上去再在保存时报错。
+   */
+  policy: SlotPolicy;
   activeRuleIds: Set<string>;
   conflicts: Conflict[];
   /** 统一连发间隔（所有单键规则共享）。 */
@@ -73,6 +79,7 @@ interface KeyState {
 
 export default function HorizontalLayout({
   rules,
+  policy,
   activeRuleIds,
   conflicts,
   interval,
@@ -299,7 +306,20 @@ export default function HorizontalLayout({
             {MOUSE_ROWS.map((row, ri) => (
               <div key={ri} className="hmouse-row">
                 {row.map((m: { code: MouseButton; label: string }) =>
-                  bindableCap(m.code, mouseKey(m.code), m.label, { width: '64px' }, 'hmouse-cap'),
+                  // 当前输入模式注入不了的按钮（DD-HID 的侧键）置灰不可点，
+                  // 避免用户点上去、保存时才被后端拒绝。
+                  policy.mouse.includes(m.code) ? (
+                    bindableCap(m.code, mouseKey(m.code), m.label, { width: '64px' }, 'hmouse-cap')
+                  ) : (
+                    <span
+                      key={m.code}
+                      className="hkb-cap hkb-cap--deco hmouse-cap"
+                      style={{ width: '64px' }}
+                      title="当前输入模式不支持此按键"
+                    >
+                      {m.label}
+                    </span>
+                  ),
                 )}
               </div>
             ))}

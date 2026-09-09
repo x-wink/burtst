@@ -6,11 +6,16 @@
 //! 文件容器格式（[`qzh_format::header::FileHeader`] / AES-GCM）由 `qzh-format` crate 负责。
 
 pub mod key_id;
+pub mod key_policy;
 pub mod macro_seq;
 pub mod profile;
 pub mod schema_migrate;
 
 pub use key_id::{KeyId, MouseButton};
+pub use key_policy::{
+    accepts, find_rule_violations, sanitize_profile, slot_policy, InjectCaps, KeyRejection,
+    KeySlot, SanitizeReport, SlotPolicy,
+};
 pub use profile::{
     Advanced, BurstMode, BurstRule, Hotkeys, Profile, ProfileError, ProfileMeta,
     CURRENT_SCHEMA_VERSION, DEFAULT_INTERVAL_MS, MAX_INTERVAL_MS, MAX_RULES,

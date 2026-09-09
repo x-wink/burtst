@@ -1,10 +1,18 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 import Button from '../components/Button';
 import { CardList, CardListButton } from '../components/CardList';
 import type { CloseBehavior } from '../components/CloseBehaviorForm';
-import KeyCapture, { keyEq, type KeyId } from '../components/KeyCapture';
+import KeyCapture, {
+  type CaptureReject,
+  keyboardKey,
+  keyEq,
+  type KeyId,
+  MODIFIER_VK,
+  type SlotPolicy,
+} from '../components/KeyCapture';
 import { VolumeIcon } from '../components/icons';
 import Tabs from '../components/Tabs';
+import { useToast } from '../components/Toast';
 import type { ConflictSeverity } from '../conflicts';
 import DialogShell from './DialogShell';
 import ProfileCardList, { type SettingsProfileEntry } from './ProfileCardList';
@@ -74,6 +82,8 @@ interface Props {
   onToggleGlobal: () => void;
   onSetCloseBehavior: (choice: CloseBehavior | null) => void;
   hotkeys: { global_toggle: KeyId | null; global_stop: KeyId | null; panel_toggle: KeyId | null };
+  /** 热键槽的允许集，来自后端 `get_key_policy`。 */
+  hotkeyPolicy: SlotPolicy;
   hotkeyConflicts: {
     global_toggle: ConflictSeverity | null;
     global_stop: ConflictSeverity | null;
@@ -315,6 +325,31 @@ export default function SettingsDialog(props: Props) {
   const [tab, setTab] = useState<SettingsTab>(props.initialTab ?? 'general');
   const [hotkeyDupNote, setHotkeyDupNote] = useState<string | null>(null);
   const { sound } = props;
+  const toast = useToast();
+
+  // KeyCapture 查表落空时会静默丢弃这次按键，用户只看到按钮闪一下，无从判断是没按上还是不支持。
+  // 回调稳定引用：KeyCapture 的监听 effect 依赖 onReject，内联函数会导致每次渲染重挂监听。
+  const notifyHotkeyReject = useCallback(
+    (info: CaptureReject) => {
+      if (info.reason === 'mouse' || info.reason === 'mouse-unsupported') {
+        toast.warning('全局热键只能绑定键盘按键，鼠标按键与滚轮请用在连发规则上');
+        return;
+      }
+      toast.warning(`不支持绑定这个按键（${info.code}），请换一个`);
+    },
+    [toast],
+  );
+
+  // AltGr 布局（德语 / 法语 / 波兰语等）把右 Alt 当 AltGr 用，键盘驱动会在它前面补发一个左 Ctrl，
+  // 低级钩子看到的是「左 Ctrl 按下 + 右 Alt 按下」两个事件。所以这两个键同时绑热键会互相牵连，
+  // 只绑右 Alt 则要提醒别再占用左 Ctrl。中文 / 英文常用布局的右 Alt 是普通 Alt，不受影响。
+  const boundHotkeys = [
+    props.hotkeys.global_toggle,
+    props.hotkeys.global_stop,
+    props.hotkeys.panel_toggle,
+  ];
+  const rightAltBound = boundHotkeys.some((k) => keyEq(k, keyboardKey(MODIFIER_VK.AltRight)));
+  const leftCtrlBound = boundHotkeys.some((k) => keyEq(k, keyboardKey(MODIFIER_VK.ControlLeft)));
 
   // 全局热键只能绑定键盘实体键（KeyCapture keyboardOnly），且三者互不重复——重复会让该键被
   // 某个热键抢先处理、其余功能失效，行为不可预期。绑定前若与另一全局热键相同则拒绝并提示。
@@ -506,7 +541,8 @@ export default function SettingsDialog(props: Props) {
                   <KeyCapture
                     value={props.hotkeys.global_toggle}
                     nullable
-                    keyboardOnly
+                    policy={props.hotkeyPolicy}
+                    onReject={notifyHotkeyReject}
                     placeholder="未设置"
                     conflict={props.hotkeyConflicts.global_toggle}
                     onChange={(k) => setGlobalHotkey('global_toggle', k)}
@@ -517,7 +553,8 @@ export default function SettingsDialog(props: Props) {
                       <KeyCapture
                         value={props.hotkeys.global_stop}
                         nullable
-                        keyboardOnly
+                        policy={props.hotkeyPolicy}
+                        onReject={notifyHotkeyReject}
                         placeholder="同开启键"
                         conflict={props.hotkeyConflicts.global_stop}
                         onChange={(k) => setGlobalHotkey('global_stop', k)}
@@ -532,7 +569,8 @@ export default function SettingsDialog(props: Props) {
                   <KeyCapture
                     value={props.hotkeys.panel_toggle}
                     nullable
-                    keyboardOnly
+                    policy={props.hotkeyPolicy}
+                    onReject={notifyHotkeyReject}
                     placeholder="未设置"
                     conflict={props.hotkeyConflicts.panel_toggle}
                     onChange={(k) => setGlobalHotkey('panel_toggle', k)}
@@ -541,8 +579,27 @@ export default function SettingsDialog(props: Props) {
               </div>
             </div>
             {hotkeyDupNote && <p className="settings-note settings-note-warn">{hotkeyDupNote}</p>}
+            {rightAltBound &&
+              (leftCtrlBound ? (
+                <p className="settings-note settings-note-warn">
+                  右 Alt 和左 Ctrl 同时绑了热键。如果你用的是德语 / 法语 / 波兰语等带 AltGr
+                  的键盘布局，右 Alt 就是 AltGr，按下时系统会先补发一个左
+                  Ctrl，于是两个热键会一起触发。 用这类布局请换掉其中一个；中文 /
+                  英文常用布局不受影响。
+                </p>
+              ) : (
+                <p className="settings-note">
+                  已绑定右 Alt。带 AltGr 的键盘布局（德语 / 法语 / 波兰语等）下右 Alt 就是
+                  AltGr，按下时系统会先补发一个左 Ctrl，所以别再把左 Ctrl 绑给另一个热键。中文 /
+                  英文常用布局的右 Alt 是普通 Alt，不受影响。
+                </p>
+              ))}
             <p className="settings-note">
-              全局热键仅支持键盘按键，三个热键不能重复；热键随当前配置文件保存。
+              点按键框开始捕获，随后按下要绑定的键；已绑定的键框上点右键可清除。
+            </p>
+            <p className="settings-note">
+              全局热键仅支持键盘按键（含左右 Shift / Ctrl / Alt /
+              Win），三个热键不能重复；热键随当前配置文件保存。
             </p>
           </SettingsSection>
         )}

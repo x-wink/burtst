@@ -200,6 +200,11 @@ body {
   background: var(--fb-app-control-hover);
 }
 
+/* 不可用但仍可点：点击会弹出说明为什么不可用，故保留 pointer 而非 not-allowed。 */
+.win-btn[aria-disabled='true'] {
+  opacity: 0.4;
+}
+
 .win-btn.close:hover {
   background: var(--fb-color-danger-strong);
   color: var(--fb-text-on-accent);
