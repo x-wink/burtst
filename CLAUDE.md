@@ -59,6 +59,7 @@ apps/main/src-tauri/src/        # Tauri 后端（Rust）
 apps/main/src/windows/panel/    # 面板窗口（React）
   main.tsx                      # 入口，挂载 Provider
   PanelApp.tsx / .css           # 根组件（竖版规则列表 + 横版键鼠图）
+  changelog.ts                  # 从随包 CHANGELOG.md 切出指定版本那一节
   HorizontalLayout.tsx / .css   # 横版键鼠图布局
   keyboardLayout.ts             # 键盘/鼠标示意图键位表
   theme.css                     # 设计 Token（颜色/间距/字号变量）
@@ -82,6 +83,7 @@ packages/qzh-format/src/
 packages/qzh-profile/src/
   key_id.rs                     # KeyId（Keyboard(VK) | Mouse(MouseButton)）+ MouseButton 7 键（左/右/中/X1/X2 + 滚轮上下）
   profile.rs                    # Profile / BurstRule 数据结构 + validate()
+  key_policy.rs                 # 按键角色与录入策略（KeySlot / accepts / sanitize_profile）
   macro_seq.rs                  # MacroSequence / MacroStep + MAX_STEPS=256（亲友功能）
   schema_migrate.rs             # migrate_profile()，调用 packages/migrate
   lib.rs                        # load_from_path / save_to_path 高层 helper
