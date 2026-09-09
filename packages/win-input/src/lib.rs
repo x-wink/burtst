@@ -6,12 +6,10 @@
 #[cfg(windows)]
 mod dd_common;
 #[cfg(windows)]
-#[cfg(windows)]
 pub mod ddsimple;
 #[cfg(windows)]
 pub mod interception;
 
-#[cfg(windows)]
 #[cfg(windows)]
 use ddsimple::DdSimpleBackend;
 #[cfg(windows)]
@@ -270,7 +268,6 @@ static INTERCEPTION_MOUSE_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 const MODE_SENDINPUT: u8 = 0;
 #[cfg(any(test, windows))]
 const MODE_INTERCEPTION: u8 = 1;
-#[cfg(any(test, windows))]
 #[cfg(any(test, windows))]
 const MODE_DD_SIMPLE: u8 = 3;
 
@@ -774,7 +771,6 @@ mod tests {
         assert!(!InputMode::Interception.requires_distinct_target_for_toggle());
     }
 
-    #[cfg(windows)]
     #[test]
     fn interception_wheel_down_routes_to_wheel_backend() {
         assert_eq!(

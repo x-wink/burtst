@@ -53,14 +53,20 @@ pub enum KeySlot {
     Trigger,
     /// 规则的连发按键，且与启动 / 停止键不同。纯写。
     Target,
-    /// 启动键与连发按键重合（默认模式、横版单键模型）。读写皆是，取两者交集。
+    /// 启动键与连发按键重合，规则是按压连发。读写皆是，取两者交集。
     TriggerTarget,
+    /// 启动键与连发按键重合，规则是切换连发。重合态对自注入过滤的要求比按压更高，
+    /// 故与 [`Self::TriggerTarget`] 分开：后端不支持时这个槽位是空集，键盘键也不收。
+    TriggerTargetToggle,
 }
 
 impl KeySlot {
     /// 该槽位的键是否会被注入（写角色）。决定它受不受后端能力约束。
     pub fn injects(self) -> bool {
-        matches!(self, Self::Target | Self::TriggerTarget)
+        matches!(
+            self,
+            Self::Target | Self::TriggerTarget | Self::TriggerTargetToggle
+        )
     }
 }
 
@@ -99,6 +105,10 @@ pub enum KeyRejection {
 
 /// 判定某个键能否录入某个槽位。这是本模块唯一的判定入口，其余导出都由它派生。
 pub fn accepts(slot: KeySlot, key: KeyId, caps: InjectCaps) -> Result<(), KeyRejection> {
+    // 能力先判：后端撑不住这个槽位时，是哪个键都不重要。
+    if slot == KeySlot::TriggerTargetToggle && !caps.coincident_toggle {
+        return Err(KeyRejection::CoincidentToggleUnsupported);
+    }
     match key {
         KeyId::Keyboard(vk) => {
             if is_modifier_vk(vk) && slot != KeySlot::Hotkey {
@@ -111,9 +121,9 @@ pub fn accepts(slot: KeySlot, key: KeyId, caps: InjectCaps) -> Result<(), KeyRej
                 return Err(KeyRejection::MouseNotAllowed);
             }
             // 现存后端（SendInput / Interception / DDSimple）都注入得了全部鼠标按钮与滚轮。
-            // 唯一有值域缺口的是已停用的 DD-HID，随其一并移除；将来若有后端受限，
+            // 唯一有值域缺口的是已停用的 DD-HID，随其一并移除；将来若有后端按钮值域受限，
             // 在 InjectCaps 加能力位并在此判定即可，SlotPolicy 会自动跟着变。
-            let _ = (btn, caps);
+            let _ = btn;
             Ok(())
         }
     }
@@ -124,15 +134,21 @@ pub fn accepts(slot: KeySlot, key: KeyId, caps: InjectCaps) -> Result<(), KeyRej
 /// 键盘普通键一律允许，故不单列；前端自己的 `code` → VK 映射决定它认得哪些键。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SlotPolicy {
+    /// 是否接受普通键盘键。为 false 时该槽位在当前后端下不可用，任何键都收不了。
+    pub keyboard: bool,
     /// 是否接受左右修饰键。
     pub modifiers: bool,
     /// 接受的鼠标按钮；空数组表示该槽位完全不接受鼠标与滚轮。
     pub mouse: Vec<MouseButton>,
 }
 
+/// 用于探测「普通键盘键收不收」的样本 VK。取字母 A，不是修饰键也不是任何特殊键。
+const SAMPLE_PLAIN_VK: u32 = 0x41;
+
 /// 导出某个槽位的允许集。逐个键走 [`accepts`] 过滤，保证描述与判定不可能漂移。
 pub fn slot_policy(slot: KeySlot, caps: InjectCaps) -> SlotPolicy {
     SlotPolicy {
+        keyboard: accepts(slot, KeyId::Keyboard(SAMPLE_PLAIN_VK), caps).is_ok(),
         modifiers: accepts(slot, KeyId::Keyboard(MODIFIER_VKS[0]), caps).is_ok(),
         mouse: ALL_MOUSE_BUTTONS
             .into_iter()
@@ -172,6 +188,7 @@ pub fn slot_of(rule: &BurstRule, key: KeyId) -> KeySlot {
     let reads = key == rule.trigger_key || key == stop;
     let writes = key == rule.target_key;
     match (reads, writes) {
+        (true, true) if rule.mode == BurstMode::Toggle => KeySlot::TriggerTargetToggle,
         (true, true) => KeySlot::TriggerTarget,
         (false, true) => KeySlot::Target,
         _ => KeySlot::Trigger,
@@ -193,16 +210,7 @@ pub fn find_rule_violations(rules: &[BurstRule], caps: InjectCaps) -> Vec<(Strin
                 continue;
             }
             seen.push(key);
-            let slot = slot_of(rule, key);
-            // 后端不支持重合态时，Toggle 规则的 TriggerTarget 槽位是空集，与具体是哪个键无关。
-            if slot == KeySlot::TriggerTarget
-                && rule.mode == BurstMode::Toggle
-                && !caps.coincident_toggle
-            {
-                out.push((rule.id.clone(), KeyRejection::CoincidentToggleUnsupported));
-                continue;
-            }
-            if let Err(reason) = accepts(slot, key, caps) {
+            if let Err(reason) = accepts(slot_of(rule, key), key, caps) {
                 out.push((rule.id.clone(), reason));
             }
         }

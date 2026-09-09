@@ -244,6 +244,11 @@ impl BurstEngine {
         revive(self.rules.lock()).rules()
     }
 
+    /// 当前生效的全局热键。前端在写入被拒时用它回滚，避免界面与引擎分叉。
+    pub fn get_hotkeys(&self) -> Hotkeys {
+        revive(self.hotkeys.lock()).clone()
+    }
+
     /// 当前正在执行连发的规则 ID 集合：hold 模式表示触发键被按住，toggle 模式表示已开启。
     /// 用于前端轮询展示激活态视觉反馈。
     pub fn get_active_ids(&self) -> Vec<String> {

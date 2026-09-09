@@ -270,24 +270,29 @@ export const MODIFIER_VK: Record<string, number> = {
  * 切换配置根本不经过前端，判定必须以后端为准。
  */
 export interface SlotPolicy {
+  /** 是否接受普通键盘键。为 false 时该槽位在当前后端下不可用，任何键都收不了。 */
+  keyboard: boolean;
   /** 是否接受左右修饰键。 */
   modifiers: boolean;
   /** 接受的鼠标按钮；空数组表示该槽位完全不收鼠标与滚轮。 */
   mouse: MouseButton[];
 }
 
-/** 四个槽位的允许集。输入模式切换后需要重新拉取。 */
+/** 五个槽位的允许集。输入模式切换后需要重新拉取。 */
 export interface KeyPolicies {
   hotkey: SlotPolicy;
   trigger: SlotPolicy;
   target: SlotPolicy;
+  /** 按压连发里启动键与连发按键重合。 */
   trigger_target: SlotPolicy;
+  /** 切换连发里启动键与连发按键重合。后端不支持重合态时是空集。 */
+  trigger_target_toggle: SlotPolicy;
   /** 当前后端能否支持切换连发的重合态（启动键与连发按键相同）。 */
   coincident_toggle: boolean;
 }
 
 /** 后端未就绪时的兜底：只收键盘普通键，最保守。 */
-export const RESTRICTIVE_POLICY: SlotPolicy = { modifiers: false, mouse: [] };
+export const RESTRICTIVE_POLICY: SlotPolicy = { keyboard: true, modifiers: false, mouse: [] };
 
 /** 浏览器 `KeyboardEvent.code` → VK；`includeModifiers` 为 true 时额外接受修饰键。 */
 export function vkFromCode(code: string, includeModifiers = false): number | undefined {
@@ -321,8 +326,10 @@ export type CaptureReject =
   | { reason: 'modifier'; code: string }
   /** 前端的 code → VK 表里没有这个键。 */
   | { reason: 'unknown'; code: string }
-  /** 该槽位完全不收鼠标与滚轮（全局热键）。 */
+  /** 该槽位完全不收鼠标与滚轮（全局热键），或这个鼠标按键根本不认识。 */
   | { reason: 'mouse' }
+  /** 该槽位在当前输入模式下整个不可用，换任何键都没用。 */
+  | { reason: 'slot-disabled' }
   /** 该槽位收鼠标，但当前输入模式注入不了这个按钮（DD-HID 的侧键）。 */
   | { reason: 'mouse-unsupported'; button: MouseButton };
 
@@ -373,6 +380,12 @@ export default function KeyCapture({
     const keyboardHandler = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      // 槽位整体不可用时连普通键盘键都不收，先报这个原因，否则用户会以为是自己按错了键
+      if (!policy.keyboard) {
+        onReject?.({ reason: 'slot-disabled' });
+        setCapturing(false);
+        return;
+      }
       const vk = vkFromCode(e.code, policy.modifiers);
       if (vk !== undefined) {
         onChange(keyboardKey(vk));
@@ -397,6 +410,11 @@ export default function KeyCapture({
         setCapturing(false);
         return;
       }
+      if (!policy.keyboard) {
+        onReject?.({ reason: 'slot-disabled' });
+        setCapturing(false);
+        return;
+      }
       onReject?.(
         policy.mouse.length === 0 || btn === undefined
           ? { reason: 'mouse' }
@@ -410,9 +428,11 @@ export default function KeyCapture({
       const btn: MouseButton = e.deltaY < 0 ? 'wheel_up' : 'wheel_down';
       if (!policy.mouse.includes(btn)) {
         onReject?.(
-          policy.mouse.length === 0
-            ? { reason: 'mouse' }
-            : { reason: 'mouse-unsupported', button: btn },
+          !policy.keyboard
+            ? { reason: 'slot-disabled' }
+            : policy.mouse.length === 0
+              ? { reason: 'mouse' }
+              : { reason: 'mouse-unsupported', button: btn },
         );
         return;
       }

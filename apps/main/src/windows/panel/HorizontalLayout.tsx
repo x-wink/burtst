@@ -306,8 +306,8 @@ export default function HorizontalLayout({
             {MOUSE_ROWS.map((row, ri) => (
               <div key={ri} className="hmouse-row">
                 {row.map((m: { code: MouseButton; label: string }) =>
-                  // 当前输入模式注入不了的按钮（DD-HID 的侧键）置灰不可点，
-                  // 避免用户点上去、保存时才被后端拒绝。
+                  // 当前后端注入不了的按钮置灰不可点，避免用户点上去、保存时才被拒绝。
+                  // 现存三个后端都覆盖全部按钮，这里是给将来受限的后端留的口子。
                   policy.mouse.includes(m.code) ? (
                     bindableCap(m.code, mouseKey(m.code), m.label, { width: '64px' }, 'hmouse-cap')
                   ) : (

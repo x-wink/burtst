@@ -14,9 +14,7 @@ use qzh_profile::{
 };
 
 use super::engine::EngineState;
-use super::profile::{
-    now_secs, pick_unique_name, profiles_dir, set_active_path, write_profile_file_to_path,
-};
+use super::profile::{now_secs, pick_unique_name, profiles_dir, write_profile_file_to_path};
 
 static IMPORT_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -406,17 +404,17 @@ pub fn import_external_config(
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         rules,
-        hotkeys: hotkeys.clone(),
+        hotkeys,
         advanced: Advanced::default(),
     };
     // 兜底适配有效操作下限：任何解析器产出的 <10ms 间隔在落盘前钳到 10ms，
     // 与加载旧配置（read_profile_from_file）行为一致。
     profile.clamp_intervals();
 
-    let saved_path = write_profile_file_to_path(&final_path, &profile)?;
-    set_active_path(&app, &saved_path);
-    state.0.set_rules(profile.rules.clone());
-    state.0.set_hotkeys(hotkeys);
+    write_profile_file_to_path(&final_path, &profile)?;
+    // 第三方配置的按键映射（vk_to_key_id）可能产出本版本不接受的组合，
+    // 与导入 .qzh 一样统一经 activate_profile_file 净化后再装引擎。
+    let profile = crate::commands::profile::activate_profile_file(&app, &state.0, &final_path)?;
     crate::tray::refresh_menu(&app);
 
     Ok(profile)

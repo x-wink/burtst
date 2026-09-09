@@ -334,6 +334,11 @@ export default function SettingsDialog(props: Props) {
         toast.warning('全局热键只能绑定键盘按键，鼠标按键与滚轮请用在连发规则上');
         return;
       }
+      // 热键槽的 keyboard 恒为 true，slot-disabled 到不了这里，兜底当作不支持处理
+      if (info.reason === 'slot-disabled') {
+        toast.warning('这个按键当前不可绑定，请换一个');
+        return;
+      }
       toast.warning(`不支持绑定这个按键（${info.code}），请换一个`);
     },
     [toast],

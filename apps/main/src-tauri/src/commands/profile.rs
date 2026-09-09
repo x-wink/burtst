@@ -548,13 +548,8 @@ pub fn delete_profile(
 
     // 删的是激活配置：加载默认配置；若不存在或损坏则重建
     let default_path = dir.join(format!("{DEFAULT_PROFILE_NAME}.qzh"));
-    let profile = match read_profile_from_file(&default_path) {
-        Ok(p) => {
-            state.0.set_rules(p.rules.clone());
-            state.0.set_hotkeys(p.hotkeys.clone());
-            set_active_path(&app, &default_path.to_string_lossy());
-            p
-        }
+    let profile = match activate_profile_file(&app, &state.0, &default_path) {
+        Ok(p) => p,
         Err(e) => {
             if default_path.exists() {
                 warn!("默认配置损坏将重建: {}", e);
@@ -679,9 +674,9 @@ pub fn import_qzh_profile(
     profile.schema_version = CURRENT_SCHEMA_VERSION;
 
     write_profile_file_to_path(&final_path, &profile)?;
-    state.0.set_rules(profile.rules.clone());
-    state.0.set_hotkeys(profile.hotkeys.clone());
-    set_active_path(&app, &final_path.to_string_lossy());
+    // 落盘后一律经 activate_profile_file 激活，别在这里自己 set_rules：
+    // 分享来的 .qzh 完全绕过前端录入拦截，净化必须和启动、托盘切换走同一条路。
+    let profile = activate_profile_file(&app, &state.0, &final_path)?;
     crate::tray::refresh_menu(&app);
     info!("已导入 .qzh 配置「{}」", profile.meta.name);
     Ok(profile)

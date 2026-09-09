@@ -44,7 +44,7 @@ pub fn set_global_hotkeys(state: State<EngineState>, mut hotkeys: Hotkeys) -> Re
     Ok(())
 }
 
-/// 四个录入槽位在当前输入模式下的允许集，供前端按键捕获组件查表。
+/// 五个录入槽位在当前输入模式下的允许集，供前端按键捕获组件查表。
 ///
 /// 前端不再自行维护白名单：能力（后端注入得了什么）随输入模式变，策略（产品上让不让绑）
 /// 写在 [`qzh_profile::key_policy`]，两者都只有这一份。输入模式切换后需要重新拉取。
@@ -56,8 +56,10 @@ pub struct KeyPolicies {
     pub trigger: SlotPolicy,
     /// 规则的连发按键，且与启动 / 停止键不同。纯写。
     pub target: SlotPolicy,
-    /// 启动键与连发按键重合（默认模式、横版单键）。读写取交集。
+    /// 按压连发里启动键与连发按键重合（默认模式、横版单键）。读写取交集。
     pub trigger_target: SlotPolicy,
+    /// 切换连发里启动键与连发按键重合。后端不支持重合态时是空集，键盘键也不收。
+    pub trigger_target_toggle: SlotPolicy,
     /// 当前后端能否支持 Toggle 规则的重合态。为 false 时默认模式建不出切换连发。
     pub coincident_toggle: bool,
 }
@@ -70,6 +72,7 @@ pub fn get_key_policy() -> KeyPolicies {
         trigger: slot_policy(KeySlot::Trigger, caps),
         target: slot_policy(KeySlot::Target, caps),
         trigger_target: slot_policy(KeySlot::TriggerTarget, caps),
+        trigger_target_toggle: slot_policy(KeySlot::TriggerTargetToggle, caps),
         coincident_toggle: caps.coincident_toggle,
     }
 }
@@ -138,6 +141,11 @@ pub fn set_rules(state: State<EngineState>, rules: Vec<BurstRule>) -> Result<(),
 #[tauri::command]
 pub fn get_rules(state: State<EngineState>) -> Vec<BurstRule> {
     state.0.get_rules()
+}
+
+#[tauri::command]
+pub fn get_hotkeys(state: State<EngineState>) -> Hotkeys {
+    state.0.get_hotkeys()
 }
 
 #[tauri::command]

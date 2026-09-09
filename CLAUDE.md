@@ -140,17 +140,17 @@ DDSimple 驱动注入把 `ExtraInformation` 写死为 0，`SIM_MARKER` 无法幸
 
 系统里的按键只有两种角色。**读**角色只被低级钩子观察、永不注入（三个全局热键、规则的 `trigger_key` 与 `stop_key`）；**写**角色只经 `win_input::dispatch` 注入、不参与触发判定（`target_key`）。驱动支持只对写角色有意义——侧键在 DDSimple 下能注入，但读角色本来就不受注入能力影响。
 
-一个槽位可能同时承担两种角色（默认模式与横版单键模型的连发按键，`trigger == target`），此时受两套约束的**交集**。方向与权限模型的 `rw` 相反：权限枚举「被授予的动作」，角色越多动作越多故取并集；这里枚举「够格的按键」，角色越多要求越多故取交集。`KeySlot` 的四个变体就是这个模型：`Hotkey` / `Trigger` / `Target` / `TriggerTarget`。
+一个槽位可能同时承担两种角色（默认模式与横版单键模型的连发按键，`trigger == target`），此时受两套约束的**交集**。方向与权限模型的 `rw` 相反：权限枚举「被授予的动作」，角色越多动作越多故取并集；这里枚举「够格的按键」，角色越多要求越多故取交集。`KeySlot` 的五个变体就是这个模型：`Hotkey` / `Trigger` / `Target` / `TriggerTarget` / `TriggerTargetToggle`。重合态按规则模式再分一层，因为切换连发对自注入过滤的要求比按压高。
 
 限制来自两个源，模块里分开表达。**能力**是后端做不做得到，随输入模式变，由 `InjectCaps` 从 `win-input` 的 `InputMode` 谓词填充（DD-HID 移除后只剩 `coincident_toggle` 一位；将来若有后端受限，加能力位即可，`SlotPolicy` 会自动跟着变）；**策略**是产品上让不让做（热键禁鼠标、规则禁修饰键），与输入模式无关，写死在模块里。二者都不是对方，混在一起模型会裂：热键槽和启动键槽同为纯读，但前者禁鼠标后者不禁。
 
-DDSimple 下 Toggle 规则的 `TriggerTarget` 是**空集**——`ExtraInformation` 被驱动写死为 0，自注入只能靠时间窗口队列过滤，该队列对重合键无法可靠区分「用户按下」与「自身回灌」。Hold 的重合态仍放行，那份不可靠性是已知且已接受的（见 `win-input/src/lib.rs` 顶部）。横版与 DD 互斥的根就在这里：横版每个键位都是重合态，故 `switchLayout` 直接以 `coincident_toggle` 为准，不再按模式名硬判。全面互斥仍带一层产品简化（Hold 的重合态其实允许），不是纯从模型推出来的。
+DDSimple 下 `TriggerTargetToggle` 是**空集**，键盘键也不收（`SlotPolicy.keyboard` 为 false）——`ExtraInformation` 被驱动写死为 0，自注入只能靠时间窗口队列过滤，该队列对重合键无法可靠区分「用户按下」与「自身回灌」。能力判定写在 `accepts` 的开头，`slot_policy` 与 `find_rule_violations` 都由它派生，导出与判定因此不可能漂移。Hold 的重合态仍放行，那份不可靠性是已知且已接受的（见 `win-input/src/lib.rs` 顶部）。横版与 DD 互斥的根就在这里：横版每个键位都是重合态，故 `switchLayout` 直接以 `coincident_toggle` 为准，不再按模式名硬判。全面互斥仍带一层产品简化（Hold 的重合态其实允许），不是纯从模型推出来的。
 
 **判定与提醒分两层**。本模块管**硬性正确性**：这个键放进这个槽位对不对，错了就拦。`conflicts.ts` 管**软性提醒**：绑定之间可能互相干扰（面板键遮蔽全局键、热键盖住规则触发键、A 的连发键是 B 的触发键），是跨绑定关系，不可能由前者推出来，两者互不替代。
 
-**强制点**。`set_rules` / `set_input_mode` / `set_global_hotkeys` 三个命令拒绝违规写入，`Profile::validate()` 只管规则数与间隔、**刻意不查按键**——否则含不支持按键的旧配置会整个打不开。配置文件加载（启动、托盘切换、导入）走 `sanitize_profile` 净化：热键**置为未绑定**（那本来就是它的合法状态），规则**只停用不动按键**（改写成空会造出新的中间态，连发索引、冲突检测、界面渲染都要加分支，连锁面太大）。结果存进 `ProfileNotice`，前端挂载时用 `take_profile_notice` 取走弹窗；启动加载先于窗口创建，直接发事件会丢，运行期切换配置才额外发 `profile-sanitized`。
+**强制点**。`set_rules` / `set_input_mode` / `set_global_hotkeys` 三个命令拒绝违规写入，`Profile::validate()` 只管规则数与间隔、**刻意不查按键**——否则含不支持按键的旧配置会整个打不开。所有配置装载都必须经 `activate_profile_file`（启动加载、托盘切换、`load_profile`、导入 `.qzh`、外部导入、删除激活配置后的回落），由它统一 `sanitize_profile` 净化后再 `set_rules` / `set_hotkeys`；命令里自己拼这段序列就会漏掉净化。净化规则：热键**置为未绑定**（那本来就是它的合法状态），规则**只停用不动按键**（改写成空会造出新的中间态，连发索引、冲突检测、界面渲染都要加分支，连锁面太大）。结果存进 `ProfileNotice`，前端挂载时用 `take_profile_notice` 取走弹窗；启动加载先于窗口创建，直接发事件会丢，运行期切换配置才额外发 `profile-sanitized`。
 
-前端不再自行维护白名单，`get_key_policy` 按当前输入模式下发四个槽位的允许集，`KeyCapture` 只判断「在不在集合里」，不在就带原因回调交给页面提示。输入模式切换后需重新拉取。
+前端不再自行维护白名单，`get_key_policy` 按当前输入模式下发五个槽位的允许集，`KeyCapture` 只判断「在不在集合里」，不在就带原因回调交给页面提示；`keyboard` 为 false 的槽位连普通键盘键都不收，回调原因是 `slot-disabled`。规则卡片按 `rule.mode` 在 `trigger_target` 与 `trigger_target_toggle` 之间选。输入模式切换后需重新拉取。
 
 **自动更新**：开关存 settings.json 的 `autoUpdate`（缺省视为开启），后端 `bootstrap/update.rs` 与前端 `PanelApp` 读同一个键。`check_and_download(app, trigger)` 是唯一的检查入口，`CheckTrigger::Startup` 才受开关约束、且「已是最新」不出声；`Manual`（菜单「检查更新」或标题栏提示）一律下载——用户已经表达了更新意图，开关只管「自动」那一档。不下载时发 `update-available` 让标题栏亮提示，下载完成发 `update-ready` 弹窗，安装由 `apply_pending_update` 命令触发。`update-downloading` 带 `silent` 标志，启动期自动下载只画进度条不弹 toast。
 

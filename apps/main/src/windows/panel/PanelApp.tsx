@@ -455,6 +455,7 @@ export default function PanelApp() {
     trigger: RESTRICTIVE_POLICY,
     target: RESTRICTIVE_POLICY,
     trigger_target: RESTRICTIVE_POLICY,
+    trigger_target_toggle: RESTRICTIVE_POLICY,
     coincident_toggle: true,
   });
 
@@ -480,9 +481,17 @@ export default function PanelApp() {
         toast.warning(
           `当前输入模式无法注入${keyLabel(mouseKey(info.button))}，请换其它按键或切换输入模式`,
         );
+        return;
       }
+      if (info.reason === 'slot-disabled') {
+        toast.warning(
+          `${INPUT_MODE_LABELS[inputMode]}不支持切换连发的启动键与连发按键相同，请在高级设置里把两者分开`,
+        );
+        return;
+      }
+      toast.warning('这个位置只支持键盘按键，请换一个');
     },
-    [toast],
+    [toast, inputMode],
   );
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const updateProgressDoneTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -951,8 +960,22 @@ export default function PanelApp() {
         global_stop: hotkeys.global_stop,
         panel_toggle: hotkeys.panel_toggle,
       },
-    }).catch(() => {});
-    saveProfile(rules, hotkeys);
+    })
+      // 成功才写盘：否则界面显示的绑定与引擎实际生效的会分叉，且非法值还进了配置文件
+      .then(() => saveProfile(rules, hotkeys))
+      .catch(async (e) => {
+        toast.error(`保存热键失败：${e}`);
+        try {
+          const engineHotkeys = await invoke<Profile['hotkeys']>('get_hotkeys');
+          setHotkeys({
+            global_toggle: engineHotkeys.global_toggle ?? null,
+            global_stop: engineHotkeys.global_stop ?? null,
+            panel_toggle: engineHotkeys.panel_toggle ?? null,
+          });
+        } catch {
+          setHotkeys({ global_toggle: null, global_stop: null, panel_toggle: null });
+        }
+      });
   }, [hotkeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 全局开关启用时轮询活动规则 ID，驱动激活态脉冲动画。
@@ -1827,10 +1850,10 @@ export default function PanelApp() {
 
   function handleToggleAutoUpdate(next: boolean) {
     setAutoUpdate(next);
-    settingsStore.set(AUTO_UPDATE_KEY, next).then(
-      () => settingsStore.save(),
-      () => toast.warning('保存自动更新设置失败'),
-    );
+    settingsStore
+      .set(AUTO_UPDATE_KEY, next)
+      .then(() => settingsStore.save())
+      .catch(() => toast.warning('保存自动更新设置失败'));
   }
 
   // 标题栏提示：已下好就直接开弹窗，只是查到新版本则走一次手动检查（必定下载）
@@ -2119,7 +2142,11 @@ export default function PanelApp() {
                                 <KeyCapture
                                   onReject={notifyRuleKeyReject}
                                   policy={
-                                    showAdvanced ? keyPolicies.target : keyPolicies.trigger_target
+                                    showAdvanced
+                                      ? keyPolicies.target
+                                      : rule.mode === 'toggle'
+                                        ? keyPolicies.trigger_target_toggle
+                                        : keyPolicies.trigger_target
                                   }
                                   value={rule.target_key}
                                   onChange={(vk) => {

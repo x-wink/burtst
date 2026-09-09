@@ -19,6 +19,14 @@ fn no_coincident() -> InjectCaps {
     }
 }
 
+/// 同一条规则的按压版，用于验证重合槽位按模式分流。
+fn hold_rule(trigger: KeyId, target: KeyId, stop: Option<KeyId>) -> BurstRule {
+    BurstRule {
+        mode: BurstMode::Hold,
+        ..rule(trigger, target, stop)
+    }
+}
+
 fn rule(trigger: KeyId, target: KeyId, stop: Option<KeyId>) -> BurstRule {
     BurstRule {
         id: "r1".to_string(),
@@ -99,14 +107,20 @@ fn coincident_slot_is_intersection_of_read_and_write() {
 
 #[test]
 fn slot_policy_matches_accepts() {
-    for caps in [InjectCaps::default(), InjectCaps::default()] {
+    for caps in [InjectCaps::default(), no_coincident()] {
         for slot in [
             KeySlot::Hotkey,
             KeySlot::Trigger,
             KeySlot::Target,
             KeySlot::TriggerTarget,
+            KeySlot::TriggerTargetToggle,
         ] {
             let policy = slot_policy(slot, caps);
+            assert_eq!(
+                policy.keyboard,
+                accepts(slot, kb(0x41), caps).is_ok(),
+                "{slot:?} 普通键盘键不一致"
+            );
             assert_eq!(
                 policy.modifiers,
                 accepts(slot, kb(RIGHT_ALT), caps).is_ok(),
@@ -126,8 +140,22 @@ fn slot_policy_matches_accepts() {
 #[test]
 fn hotkey_policy_allows_modifiers_and_no_mouse() {
     let p = slot_policy(KeySlot::Hotkey, InjectCaps::default());
+    assert!(p.keyboard);
     assert!(p.modifiers);
     assert!(p.mouse.is_empty());
+}
+
+/// 后端不支持重合态时，Toggle 的重合槽位是真空集：键盘键也收不了。
+#[test]
+fn toggle_coincident_policy_is_empty_without_caps() {
+    let p = slot_policy(KeySlot::TriggerTargetToggle, no_coincident());
+    assert!(!p.keyboard);
+    assert!(!p.modifiers);
+    assert!(p.mouse.is_empty());
+
+    let p = slot_policy(KeySlot::TriggerTargetToggle, InjectCaps::default());
+    assert!(p.keyboard);
+    assert!(p.mouse.len() == ALL_MOUSE_BUTTONS.len());
 }
 
 // ── 规则里的槽位归属 ─────────────────────────────────────────────────────────
@@ -139,15 +167,29 @@ fn distinct_trigger_and_target_split_into_pure_roles() {
     assert_eq!(slot_of(&r, ms(MouseButton::Left)), KeySlot::Target);
 }
 
+/// 重合槽位按模式分流：Toggle 的自注入过滤要求更高，与 Hold 不是同一个槽位。
 #[test]
 fn same_trigger_and_target_is_coincident() {
     let r = rule(kb(KEY_Q), kb(KEY_Q), None);
+    assert_eq!(slot_of(&r, kb(KEY_Q)), KeySlot::TriggerTargetToggle);
+
+    let r = hold_rule(kb(KEY_Q), kb(KEY_Q), None);
     assert_eq!(slot_of(&r, kb(KEY_Q)), KeySlot::TriggerTarget);
 }
 
 #[test]
 fn stop_key_equal_to_target_is_coincident() {
     let r = rule(
+        kb(KEY_Q),
+        ms(MouseButton::Left),
+        Some(ms(MouseButton::Left)),
+    );
+    assert_eq!(
+        slot_of(&r, ms(MouseButton::Left)),
+        KeySlot::TriggerTargetToggle
+    );
+
+    let r = hold_rule(
         kb(KEY_Q),
         ms(MouseButton::Left),
         Some(ms(MouseButton::Left)),
