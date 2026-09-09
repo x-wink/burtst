@@ -10,26 +10,44 @@ interface Props {
   onAgreed: () => void;
 }
 
+/** 判定「已滚到底」的容差（px），避免子像素误差导致永远差一点点。 */
+const BOTTOM_SLACK = 16;
+
 export default function AgreementPage({ onAgreed }: Props) {
   const [scrolledToBottom, setScrolledToBottom] = useState(false);
   const [agreeing, setAgreeing] = useState(false);
   const [agreeError, setAgreeError] = useState('');
-  const contentRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
+  // 滚动发生在 DialogShell 的 .fb-dialog__body 上，必须监听那一层。此前挂在协议正文外面
+  // 包的一层 div 上，那个 div 高度随内容撑开、自身从不滚动，scrollHeight 恒等于
+  // clientHeight，于是挂载时就判定「已读完」，同意按钮一直可点，门禁形同虚设。
   useEffect(() => {
-    const el = contentRef.current;
+    const el = bodyRef.current;
     if (!el) return;
     const checkBottom = () => {
-      if (el.scrollHeight <= el.clientHeight + 16) {
+      // 尚未完成布局时两个高度都是 0，`0 <= 0 + 容差` 会误判成「内容不足一屏」直接放行
+      if (el.clientHeight === 0) return;
+      // 内容不足一屏时无从滚动，直接视为读完
+      if (el.scrollHeight <= el.clientHeight + BOTTOM_SLACK) {
         setScrolledToBottom(true);
         return;
       }
-      const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16;
-      if (bottom) setScrolledToBottom(true);
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_SLACK) {
+        setScrolledToBottom(true);
+      }
     };
     checkBottom();
     el.addEventListener('scroll', checkBottom, { passive: true });
-    return () => el.removeEventListener('scroll', checkBottom);
+    // 窗口缩放会改变可滚动高度，只在挂载时量一次会误判；正文本身也一并观察，
+    // 以防将来协议改成异步加载。
+    const observer = new ResizeObserver(checkBottom);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener('scroll', checkBottom);
+      observer.disconnect();
+    };
   }, []);
 
   const handleAgree = useCallback(async () => {
@@ -52,6 +70,7 @@ export default function AgreementPage({ onAgreed }: Props) {
       className="agreement-card"
       title="用户协议"
       labelId="agreement-title"
+      bodyRef={bodyRef}
       footer={
         <>
           <p className="agreement-hint">
@@ -76,9 +95,7 @@ export default function AgreementPage({ onAgreed }: Props) {
         </>
       }
     >
-      <div ref={contentRef}>
-        <Markdown className="agreement-text" source={eulaText} />
-      </div>
+      <Markdown className="agreement-text" source={eulaText} />
     </DialogShell>
   );
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import './DialogShell.css';
 
 interface Props {
@@ -12,6 +12,11 @@ interface Props {
   subheader?: ReactNode;
   /** 主体内容（可滚动） */
   children: ReactNode;
+  /**
+   * 主体滚动容器的 ref。滚动发生在这一层而非 children 内部，需要监听滚动位置的调用方
+   * （如用户协议的「读到底才可同意」）必须拿到它，挂在自己包一层的 div 上量不到东西。
+   */
+  bodyRef?: Ref<HTMLDivElement>;
   /** 底部操作区内容 */
   footer?: ReactNode;
   /** 底部对齐：end（默认）| center | spread（首项靠左其余靠右） */
@@ -28,6 +33,7 @@ export default function DialogShell({
   headerContent,
   subheader,
   children,
+  bodyRef,
   footer,
   footerAlign = 'end',
   className,
@@ -55,7 +61,9 @@ export default function DialogShell({
 
       {subheader && <div className="fb-dialog__subheader">{subheader}</div>}
 
-      <div className="fb-dialog__body">{children}</div>
+      <div className="fb-dialog__body" ref={bodyRef}>
+        {children}
+      </div>
 
       {footer && (
         <div className={`fb-dialog__footer fb-dialog__footer--${footerAlign}`}>{footer}</div>
