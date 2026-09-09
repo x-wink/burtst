@@ -65,6 +65,8 @@ apps/main/src/windows/panel/    # 面板窗口（React）
   theme.ts                      # 主题预设色板 + 亮/暗/跟随系统应用逻辑
   useKeyRelay.ts                # WebView 聚焦时键盘事件中继 Hook（面板与浮窗共用）
   components/                   # UI 基础组件
+    markdown-parse.ts           # 轻量 Markdown 解析（纯函数，无 DOM 依赖）
+    Markdown.tsx                # 解析结果 → React 元素（用户协议 / 更新公告）
   dialogs/                      # 弹窗内容组件
 apps/main/src/windows/float/    # 浮窗（panel-float.html，常驻置顶胶囊）
   FloatApp.tsx / .css           # 显示激活规则 + 全局开关 + 展开主面板
@@ -149,6 +151,8 @@ DDSimple 下 Toggle 规则的 `TriggerTarget` 是**空集**——`ExtraInformati
 **强制点**。`set_rules` / `set_input_mode` / `set_global_hotkeys` 三个命令拒绝违规写入，`Profile::validate()` 只管规则数与间隔、**刻意不查按键**——否则含不支持按键的旧配置会整个打不开。配置文件加载（启动、托盘切换、导入）走 `sanitize_profile` 净化：热键**置为未绑定**（那本来就是它的合法状态），规则**只停用不动按键**（改写成空会造出新的中间态，连发索引、冲突检测、界面渲染都要加分支，连锁面太大）。结果存进 `ProfileNotice`，前端挂载时用 `take_profile_notice` 取走弹窗；启动加载先于窗口创建，直接发事件会丢，运行期切换配置才额外发 `profile-sanitized`。
 
 前端不再自行维护白名单，`get_key_policy` 按当前输入模式下发四个槽位的允许集，`KeyCapture` 只判断「在不在集合里」，不在就带原因回调交给页面提示。输入模式切换后需重新拉取。
+
+**Markdown 渲染**：用户协议（`assets/EULA.md`，`?raw` 内联进包）与更新公告（`update.body`，来自 updater 接口）都由 `components/Markdown.tsx` 渲染，解析在同目录的 `markdown-parse.ts`。不引第三方库有两个硬理由：更新公告正文来自网络，任何走 `dangerouslySetInnerHTML` 的方案都会开出 XSS 面，而这里只产出 React 元素、文本一律经 children 转义；现成渲染器会输出真的 `<a href>`，Tauri WebView 点一下就把面板导航走且无法返回，故链接只渲染文本、完整地址放 `title`（本应用未装 opener / shell 插件）。支持范围按两份文档实际用法划定：ATX 标题、`---` 分隔线、有序 / 无序列表（可嵌套）、段落、加粗、斜体、行内代码、链接；表格、引用块、围栏代码块、图片与内联嵌套不支持，超范围语法当普通文本显示。段落软换行按两侧是否为 CJK 决定要不要补空格。
 
 **AppHandle 不进 packages**：`win-driver` / `win-input` / `win-sysinfo` / `burst-engine` 所有函数均不接受 `AppHandle` 参数。资源目录由 `commands/driver.rs` 从 `app.path().resource_dir()` 取得后传入，Tauri 状态管理留在 commands 层。
 

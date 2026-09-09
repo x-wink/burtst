@@ -1,4 +1,5 @@
 import Button from '../components/Button';
+import Markdown from '../components/Markdown';
 import './dialog-base.css';
 import './UpdateNoticeDialog.css';
 
@@ -25,7 +26,7 @@ export default function UpdateNoticeDialog({ info, onClose }: Props) {
         <div className="update-notes-section">
           <p className="update-notes-label">更新内容</p>
           <div className="update-notes-body">
-            <pre className="update-notes-text">{info.notes}</pre>
+            <Markdown className="update-notes-text" source={info.notes} />
           </div>
         </div>
       )}

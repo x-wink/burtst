@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import eulaText from '../../../assets/EULA.md?raw';
 import Button from '../components/Button';
+import Markdown from '../components/Markdown';
 import DialogShell from './DialogShell';
 import './AgreementDialog.css';
 
@@ -76,7 +77,7 @@ export default function AgreementPage({ onAgreed }: Props) {
       }
     >
       <div ref={contentRef}>
-        <pre className="agreement-text">{eulaText}</pre>
+        <Markdown className="agreement-text" source={eulaText} />
       </div>
     </DialogShell>
   );

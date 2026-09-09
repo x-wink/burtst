@@ -65,15 +65,9 @@
 }
 
 .update-notes-text {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: var(--fb-fs-md);
   line-height: var(--fb-lh-loose);
   color: var(--fb-text-regular);
-  white-space: pre-wrap;
-  word-break: break-word;
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 .update-notice-actions {
