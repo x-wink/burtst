@@ -94,8 +94,10 @@ pub fn find_dd_hid_oem_inf() -> Vec<String> {
         let utf8 = String::from_utf8_lossy(&content).to_lowercase();
         let utf16 = if content.len() >= 2 && content[0] == 0xFF && content[1] == 0xFE {
             let u16s: Vec<u16> = content[2..]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .collect();
             String::from_utf16_lossy(&u16s).to_lowercase()
         } else {

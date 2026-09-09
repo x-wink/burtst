@@ -32,15 +32,14 @@ pub fn ps_string_array(items: &[String]) -> String {
 pub fn base64_std_encode(input: &[u8]) -> String {
     const TBL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let mut chunks = input.chunks_exact(3);
-    for c in chunks.by_ref() {
+    let (chunks, rem) = input.as_chunks::<3>();
+    for c in chunks {
         let n = ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | (c[2] as u32);
         out.push(TBL[((n >> 18) & 0x3F) as usize] as char);
         out.push(TBL[((n >> 12) & 0x3F) as usize] as char);
         out.push(TBL[((n >> 6) & 0x3F) as usize] as char);
         out.push(TBL[(n & 0x3F) as usize] as char);
     }
-    let rem = chunks.remainder();
     match rem.len() {
         1 => {
             let n = (rem[0] as u32) << 16;
